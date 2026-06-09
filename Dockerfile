@@ -39,20 +39,24 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -trimpath \
       -buildvcs=false \
       -ldflags="-s -w -buildid= -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
-      -o /out/template-go \
-      ./cmd/template-go
+      -o /out/template-mcp \
+      ./cmd/template-mcp
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639 AS runtime
 ARG VERSION=dev
 ARG COMMIT=none
-ARG SOURCE=https://github.com/meigma/template-go
+ARG SOURCE=https://github.com/meigma/template-mcp
 
-LABEL org.opencontainers.image.title="template-go" \
-      org.opencontainers.image.description="Meigma Go repository template application" \
+LABEL org.opencontainers.image.title="template-mcp" \
+      org.opencontainers.image.description="Meigma Go MCP server template" \
       org.opencontainers.image.source="${SOURCE}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${COMMIT}"
 
 USER 65532:65532
-COPY --from=build /out/template-go /usr/local/bin/template-go
-ENTRYPOINT ["/usr/local/bin/template-go"]
+COPY --from=build /out/template-mcp /usr/local/bin/template-mcp
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/template-mcp"]
+# Containers are the networked deployment: default to the Streamable HTTP
+# transport bound to all interfaces. The SDK's Origin protection still applies.
+CMD ["http", "--addr", "0.0.0.0:8080"]

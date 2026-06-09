@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/spf13/viper"
+	"github.com/spf13/cobra"
 )
 
 func TestVersionFlagPrintsBuildMetadata(t *testing.T) {
@@ -27,7 +27,7 @@ func TestVersionFlagPrintsBuildMetadata(t *testing.T) {
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("ExecuteContext returned an error: %v", err)
 	}
-	if got, want := stdout.String(), "template-go 0.1.0 (abc1234) built 2026-05-08T10:00:00Z\n"; got != want {
+	if got, want := stdout.String(), "template-mcp 0.1.0 (abc1234) built 2026-05-08T10:00:00Z\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if got := stderr.String(); got != "" {
@@ -35,37 +35,44 @@ func TestVersionFlagPrintsBuildMetadata(t *testing.T) {
 	}
 }
 
-func TestRootCommandPrintsConfiguredMessage(t *testing.T) {
+func TestRootCommandRegistersTransportSubcommands(t *testing.T) {
 	t.Parallel()
 
-	var stdout bytes.Buffer
-	root := NewRootCommand(Options{
-		Out:   &stdout,
-		Viper: viper.New(),
-	})
-	root.SetArgs([]string{"--message", "hello from cobra"})
+	root := NewRootCommand(Options{})
 
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("ExecuteContext returned an error: %v", err)
+	got := make(map[string]bool)
+	for _, cmd := range root.Commands() {
+		got[cmd.Name()] = true
 	}
-	if got, want := stdout.String(), "hello from cobra\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
+
+	for _, name := range []string{"stdio", httpCommandName} {
+		if !got[name] {
+			t.Errorf("root command is missing the %q subcommand", name)
+		}
 	}
 }
 
-func TestRootCommandReadsMessageFromEnvironment(t *testing.T) {
-	t.Setenv("TEMPLATE_GO_MESSAGE", "hello from viper")
+func TestHTTPCommandDefaultsAddrToLoopback(t *testing.T) {
+	t.Parallel()
 
-	var stdout bytes.Buffer
-	root := NewRootCommand(Options{
-		Out:   &stdout,
-		Viper: viper.New(),
-	})
+	root := NewRootCommand(Options{})
 
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("ExecuteContext returned an error: %v", err)
+	var httpCmd *cobra.Command
+	for _, cmd := range root.Commands() {
+		if cmd.Name() == httpCommandName {
+			httpCmd = cmd
+			break
+		}
 	}
-	if got, want := stdout.String(), "hello from viper\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
+	if httpCmd == nil {
+		t.Fatal("root command is missing the http subcommand")
+	}
+
+	addr, err := httpCmd.Flags().GetString("addr")
+	if err != nil {
+		t.Fatalf("get addr flag: %v", err)
+	}
+	if want := "localhost:8080"; addr != want {
+		t.Fatalf("addr default = %q, want %q", addr, want)
 	}
 }

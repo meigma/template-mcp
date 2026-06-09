@@ -1,8 +1,8 @@
 package templateinfo
 
-const name = "template-go"
+const name = "template-mcp"
 
-// Summary returns the default message printed by the starter CLI.
+// Summary returns a short human-readable description of the template.
 func Summary() string {
-	return name + " template application"
+	return name + " template MCP server"
 }

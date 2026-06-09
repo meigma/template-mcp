@@ -1,15 +1,15 @@
 version: 2
 
-project_name: template-go
+project_name: template-mcp
 
 before:
   hooks:
     - go test ./...
 
 builds:
-  - id: template-go
-    main: ./cmd/template-go
-    binary: template-go
+  - id: template-mcp
+    main: ./cmd/template-mcp
+    binary: template-mcp
     env:
       - CGO_ENABLED=0
     goos:
@@ -28,9 +28,9 @@ builds:
     mod_timestamp: '{{ .CommitTimestamp }}'
 
 archives:
-  - id: template-go
+  - id: template-mcp
     ids:
-      - template-go
+      - template-mcp
     formats:
       - binary
     name_template: >-

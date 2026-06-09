@@ -7,9 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-
-	"github.com/meigma/template-go/internal/config"
-	"github.com/meigma/template-go/internal/templateinfo"
 )
 
 // BuildInfo describes linker-injected build metadata printed by --version.
@@ -32,11 +29,17 @@ type Options struct {
 	Err io.Writer
 	// Build controls the root command version output.
 	Build BuildInfo
-	// Viper is the configuration instance used by the command tree.
+	// Viper is the configuration instance used by the command tree. It binds
+	// flags to TEMPLATE_MCP_* environment variables.
 	Viper *viper.Viper
 }
 
-// NewRootCommand creates the template-go Cobra command tree.
+// NewRootCommand creates the template-mcp Cobra command tree.
+//
+// The root command does no work on its own; it wires the two transport
+// subcommands (stdio and http) onto the same MCP server. To produce a
+// single-transport repository, delete the unwanted subcommand file and its
+// registration call below.
 func NewRootCommand(options Options) *cobra.Command {
 	if options.In == nil {
 		options.In = strings.NewReader("")
@@ -53,22 +56,18 @@ func NewRootCommand(options Options) *cobra.Command {
 	options.Build = options.Build.withDefaults()
 
 	root := &cobra.Command{
-		Use:           "template-go",
-		Short:         "Meigma Go repository template application",
+		Use:           "template-mcp",
+		Short:         "Meigma MCP server template",
 		Version:       options.Build.Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			return initializeConfig(cmd, options.Viper)
 		},
-		RunE: func(_ *cobra.Command, _ []string) error {
-			cfg := config.Load(options.Viper)
-			return printLine(options.Out, cfg.Message)
-		},
 	}
 	root.SetVersionTemplate(
 		fmt.Sprintf(
-			"template-go %s (%s) built %s\n",
+			"template-mcp %s (%s) built %s\n",
 			options.Build.Version,
 			options.Build.Commit,
 			options.Build.Date,
@@ -77,7 +76,10 @@ func NewRootCommand(options Options) *cobra.Command {
 	root.SetIn(options.In)
 	root.SetOut(options.Out)
 	root.SetErr(options.Err)
-	root.PersistentFlags().String("message", templateinfo.Summary(), "message to print")
+
+	root.AddCommand(newStdioCommand(options))
+	root.AddCommand(newHTTPCommand(options))
+
 	return root
 }
 
@@ -95,7 +97,7 @@ func (b BuildInfo) withDefaults() BuildInfo {
 }
 
 func initializeConfig(cmd *cobra.Command, vp *viper.Viper) error {
-	vp.SetEnvPrefix("TEMPLATE_GO")
+	vp.SetEnvPrefix("TEMPLATE_MCP")
 	vp.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 	vp.AutomaticEnv()
 
@@ -104,14 +106,6 @@ func initializeConfig(cmd *cobra.Command, vp *viper.Viper) error {
 	}
 	if err := vp.BindPFlags(cmd.Flags()); err != nil {
 		return fmt.Errorf("bind flags: %w", err)
-	}
-
-	return nil
-}
-
-func printLine(w io.Writer, line string) error {
-	if _, err := fmt.Fprintln(w, line); err != nil {
-		return fmt.Errorf("write output: %w", err)
 	}
 
 	return nil

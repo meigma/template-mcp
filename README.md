@@ -1,7 +1,14 @@
-# template-go
+# template-mcp
 
-`template-go` is the reusable Go repository starter for Meigma projects.
-It includes a small Go CLI skeleton, Moon tasks, pinned CI, Dependabot, baseline repository security settings, and an enabled Release Please plus GoReleaser release layer.
+`template-mcp` is a Go template for building [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers.
+It is built on the official [`modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk) and ships with the protocol and security best practices that an MCP server should have on day one.
+
+The template exposes a single demo tool, `random_int`, and demonstrates serving it over two transports from the same server code:
+
+- **Local** — the STDIO transport (`template-mcp stdio`), which clients spawn as a subprocess.
+- **Networked** — the Streamable HTTP transport (`template-mcp http`), suitable for remote and containerized deployments.
+
+Generated projects keep the transport they need and delete the other (see [Choosing a transport](#choosing-a-transport)).
 
 ## Local Bootstrap
 
@@ -15,10 +22,58 @@ After creating a new repository from this template, replace the placeholder name
 
 ```sh
 go mod edit -module github.com/meigma/YOUR_REPO
-mv cmd/template-go cmd/YOUR_BINARY
+mv cmd/template-mcp cmd/YOUR_BINARY
 ```
 
-Then update `template-go` references in the Moon tasks, GoReleaser config, `ghd.toml`, README, and package docs.
+Then update `template-mcp` references in the Moon tasks, GoReleaser config, `ghd.toml`, README, and package docs.
+The full first-setup checklist lives in [DELETE_ME.md](DELETE_ME.md).
+
+## Running the Server
+
+Run the server over STDIO (the mode a local MCP client launches):
+
+```sh
+go run ./cmd/template-mcp stdio
+```
+
+Run the server over Streamable HTTP, bound to loopback by default:
+
+```sh
+go run ./cmd/template-mcp http --addr localhost:8080
+```
+
+Both subcommands build the same `internal/mcpserver` server and differ only in how they connect it to a transport.
+
+## The Demo Tool
+
+The template registers one tool, `random_int`, in `internal/mcpserver`.
+It takes `min` and `max` arguments and returns a uniformly random integer in the inclusive range `[min, max]`.
+
+The tool is deliberately small but exercises the parts of the protocol you are most likely to use:
+
+- Typed input and output structs, from which the SDK derives the JSON Schemas automatically.
+- Structured output, marshaled from the typed return value by the SDK.
+- The tool-error convention: an invalid range (`min > max`) returns a tool-level error result (`IsError`) rather than a JSON-RPC protocol error.
+
+Replace `random_int` with your own tool, or add more tools alongside it. The server and transport code do not change when you do.
+
+## Choosing a Transport
+
+The server in `internal/mcpserver` knows nothing about transports. Each transport is a Cobra subcommand in its own file:
+
+- `internal/cli/stdio.go` — the `stdio` subcommand.
+- `internal/cli/http.go` — the `http` subcommand.
+
+To keep only one transport, delete the unused file and remove its single registration line in `internal/cli/root.go`. The tool and server code are untouched.
+
+## Security & Best Practices
+
+The template bakes in the practices that an MCP server must have. Preserve them as you build on it.
+
+- **stdout is reserved for JSON-RPC.** Over the STDIO transport, stdout carries protocol messages only. Writing anything else to stdout — a stray `fmt.Println`, a logger pointed at `os.Stdout` — silently corrupts the stream and is the most common way a stdio server breaks. The template logs to `os.Stderr` only; keep all logging and diagnostics on stderr.
+- **Origin verification and a loopback default for HTTP.** The `http` transport wraps the SDK handler in the standard library's cross-origin protection to defend against DNS-rebinding and CSRF from browsers, and `--addr` defaults to `localhost:8080`. Binding to a non-loopback address exposes the server to the network and is an explicit, security-relevant decision.
+- **The bearer-auth seam is demo-only.** The HTTP transport includes a minimal, flag-gated bearer-token check that is off by default and exists to show where authorization belongs. It is not production authorization. A production server needs a real OAuth 2.1 resource server: protected-resource metadata (RFC 9728), audience-restricted tokens (RFC 8707), and PKCE with S256. Validate token signature, expiry, and audience against a trusted authorization server.
+- **Authorization is HTTP-only.** Per the MCP specification, authorization applies to HTTP transports only. STDIO servers must not use OAuth; they take any credentials they need from the environment of the process that launched them.
 
 ## Common Tasks
 
@@ -38,15 +93,14 @@ CI runs the same aggregate check:
 moon ci --summary minimal
 ```
 
-The starter CLI is intentionally small:
+The CLI entrypoint uses Cobra and Viper in the same shape as other Meigma CLIs: `cmd/template-mcp` stays thin, `internal/cli` owns command construction, and Viper-backed flags such as the HTTP address can also be supplied through `TEMPLATE_MCP_*` environment variables.
 
 ```sh
-go run ./cmd/template-go --version
-go run ./cmd/template-go --message "hello from cobra"
+go run ./cmd/template-mcp --version
+go run ./cmd/template-mcp stdio
+go run ./cmd/template-mcp http --addr localhost:8080
 go test ./...
 ```
-
-The CLI entrypoint uses Cobra and Viper in the same shape as other Meigma CLIs: `cmd/template-go` stays thin, `internal/cli` owns command construction, and Viper-backed flags can also be supplied through `TEMPLATE_GO_*` environment variables.
 
 ## Container Image
 
@@ -54,11 +108,13 @@ The included Dockerfile builds a static Linux binary and copies it into a non-ro
 
 ```sh
 docker build --target test .
-docker build -t template-go:dev .
-docker run --rm template-go:dev --version
+docker build -t template-mcp:dev .
+docker run --rm template-mcp:dev --version
 ```
 
 The Dockerfile pins the builder and runtime images by digest and verifies that the selected Go builder image matches `.go-version`. When bumping Go, update `.go-version` and the builder `FROM` tag/digest together.
+
+Containers are the networked deployment, so a container most likely runs the `http` subcommand. When exposing the HTTP transport beyond loopback, set `--addr` accordingly and make sure the security expectations above (origin verification, real authorization) are met.
 
 Release builds can pass the same binary metadata injected by GoReleaser:
 
@@ -67,7 +123,7 @@ docker build \
   --build-arg VERSION="$(git describe --tags --always --dirty)" \
   --build-arg COMMIT="$(git rev-parse HEAD)" \
   --build-arg DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -t template-go:dev .
+  -t template-mcp:dev .
 ```
 
 ## CI and Security
@@ -93,7 +149,7 @@ The release path is:
 - Release Dry Run rehearses the GoReleaser binary path and native-runner Docker container build path on pull requests.
 - GoReleaser builds binaries, checksums, and SBOMs without publishing directly.
 - The release workflow uploads assets to the draft release and creates a GitHub-hosted attestation for `checksums.txt`.
-- The release workflow builds amd64 and arm64 container images on native GitHub-hosted runners, publishes `ghcr.io/meigma/template-go:vX.Y.Z` as a multi-platform manifest, attaches BuildKit provenance and SBOM metadata, and creates a GitHub-native attestation for the manifest digest.
+- The release workflow builds amd64 and arm64 container images on native GitHub-hosted runners, publishes `ghcr.io/meigma/template-mcp:vX.Y.Z` as a multi-platform manifest, attaches BuildKit provenance and SBOM metadata, and creates a GitHub-native attestation for the manifest digest.
 - A human inspects the draft release before publication.
 
 The root `ghd.toml` matches the default GoReleaser output so generated projects can be installed with `ghd` once the release workflow runs.

@@ -1,14 +1,16 @@
 ---
-title: template-go Docs
+title: template-mcp Docs
 slug: /
-description: Starting point for Meigma Go projects.
+description: Starting point for Meigma MCP servers.
 ---
 
-# template-go Docs
+# template-mcp Docs
 
-This repository is the starting point for Meigma Go projects.
+This repository is the starting point for Meigma [Model Context Protocol](https://modelcontextprotocol.io) servers.
 
-Generated projects should replace this page with project-specific documentation after bootstrapping:
+It provides a transport-agnostic MCP server built on the official `modelcontextprotocol/go-sdk`, with a single demo tool served over either the STDIO or Streamable HTTP transport, plus Moon tasks, pinned CI, dependency automation, repository security defaults, and an enabled release pipeline.
+
+Generated projects from `github.com/meigma/template-mcp` should replace this page with project-specific documentation after bootstrapping:
 
 - project summary
 - quick start

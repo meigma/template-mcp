@@ -7,6 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/meigma/template-mcp/internal/templateinfo"
 )
 
 // BuildInfo describes linker-injected build metadata printed by --version.
@@ -56,8 +58,8 @@ func NewRootCommand(options Options) *cobra.Command {
 	options.Build = options.Build.withDefaults()
 
 	root := &cobra.Command{
-		Use:           "template-mcp",
-		Short:         "Meigma MCP server template",
+		Use:           templateinfo.Name,
+		Short:         templateinfo.Title,
 		Version:       options.Build.Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -67,7 +69,8 @@ func NewRootCommand(options Options) *cobra.Command {
 	}
 	root.SetVersionTemplate(
 		fmt.Sprintf(
-			"template-mcp %s (%s) built %s\n",
+			"%s %s (%s) built %s\n",
+			templateinfo.Name,
 			options.Build.Version,
 			options.Build.Commit,
 			options.Build.Date,
@@ -97,7 +100,7 @@ func (b BuildInfo) withDefaults() BuildInfo {
 }
 
 func initializeConfig(cmd *cobra.Command, vp *viper.Viper) error {
-	vp.SetEnvPrefix("TEMPLATE_MCP")
+	vp.SetEnvPrefix(templateinfo.EnvPrefix())
 	vp.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 	vp.AutomaticEnv()
 

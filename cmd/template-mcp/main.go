@@ -36,10 +36,7 @@ func run() int {
 		Err: os.Stderr,
 	})
 	if err := root.ExecuteContext(ctx); err != nil {
-		if _, writeErr := fmt.Fprintln(os.Stderr, err); writeErr != nil {
-			return 1
-		}
-
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 

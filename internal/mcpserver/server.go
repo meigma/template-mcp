@@ -12,6 +12,8 @@ import (
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/meigma/template-mcp/internal/templateinfo"
 )
 
 // BuildInfo describes linker-injected build metadata surfaced to MCP clients.
@@ -33,8 +35,8 @@ func New(build BuildInfo) *mcp.Server {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	srv := mcp.NewServer(&mcp.Implementation{
-		Name:    "template-mcp",
-		Title:   "Meigma MCP server template",
+		Name:    templateinfo.Name,
+		Title:   templateinfo.Title,
 		Version: build.Version,
 	}, &mcp.ServerOptions{
 		Logger: logger,

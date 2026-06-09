@@ -20,6 +20,11 @@ import (
 const (
 	// httpCommandName is the name of the http subcommand, also used by its tests.
 	httpCommandName = "http"
+	// Flag (and viper key) names for the http subcommand. Shared between flag
+	// registration and value retrieval so the two cannot drift.
+	addrFlag      = "addr"
+	authTokenFlag = "auth-token"
+	insecureFlag  = "insecure"
 	// httpShutdownTimeout bounds how long graceful shutdown waits for in-flight
 	// requests to finish before the server is forced closed.
 	httpShutdownTimeout = 10 * time.Second
@@ -51,20 +56,20 @@ func newHTTPCommand(options Options) *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			addr := options.Viper.GetString("addr")
-			authToken := options.Viper.GetString("auth-token")
-			insecure := options.Viper.GetBool("insecure")
+			addr := options.Viper.GetString(addrFlag)
+			authToken := options.Viper.GetString(authTokenFlag)
+			insecure := options.Viper.GetBool(insecureFlag)
 			return runHTTP(cmd.Context(), options.Build, addr, authToken, insecure)
 		},
 	}
 
 	// --addr defaults to loopback, not 0.0.0.0: binding to all interfaces
 	// exposes the server to the local network and is a deliberate opt-in.
-	cmd.Flags().String("addr", "localhost:8080", "address to listen on (env TEMPLATE_MCP_ADDR)")
+	cmd.Flags().String(addrFlag, "localhost:8080", "address to listen on (env TEMPLATE_MCP_ADDR)")
 	// --auth-token is empty by default, which disables auth. See requireBearerToken
 	// for the heavy caveats: this is a DEMO-ONLY seam, not production auth.
 	cmd.Flags().String(
-		"auth-token",
+		authTokenFlag,
 		"",
 		"DEMO-ONLY shared bearer token; empty disables auth (env TEMPLATE_MCP_AUTH_TOKEN)",
 	)
@@ -72,7 +77,7 @@ func newHTTPCommand(options Options) *cobra.Command {
 	// authentication. Without it, runHTTP refuses such a configuration so a
 	// published port or container cannot silently expose every tool.
 	cmd.Flags().Bool(
-		"insecure",
+		insecureFlag,
 		false,
 		"allow binding a non-loopback address without authentication (UNSAFE; env TEMPLATE_MCP_INSECURE)",
 	)
@@ -85,6 +90,10 @@ func runHTTP(ctx context.Context, build BuildInfo, addr, authToken string, insec
 		return err
 	}
 
+	// The factory runs once per session, so each client gets a fresh server with
+	// no shared state — the safe default. If your tools need state shared across
+	// sessions (a cache, a DB pool), construct the server once outside this
+	// closure and return the same *mcp.Server for every request instead.
 	handler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server {
 			return mcpserver.New(mcpserver.BuildInfo{Version: build.Version})
@@ -232,6 +241,12 @@ func requireBearerToken(token, addr string) func(http.Handler) http.Handler {
 	return auth.RequireBearerToken(verifier, &auth.RequireBearerTokenOptions{
 		// Advertised to unauthenticated clients via the WWW-Authenticate header
 		// so they can discover the (here, hypothetical) authorization server.
+		//
+		// Caveat (demo-only): this naively reuses the bind address, so it is
+		// wrong for binds that are not a routable host:port — for example
+		// ":8080" yields "http://:8080/..." and "0.0.0.0" advertises a
+		// non-routable address. A real deployment configures the externally
+		// reachable resource URL explicitly rather than deriving it from --addr.
 		ResourceMetadataURL: fmt.Sprintf("http://%s/.well-known/oauth-protected-resource", addr),
 		Scopes:              []string{demoAuthScope},
 	})

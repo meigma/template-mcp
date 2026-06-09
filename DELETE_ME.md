@@ -28,7 +28,7 @@ The package layout keeps the server independent of any transport:
 - `cmd/template-mcp` — thin entrypoint that wires signal handling into the CLI.
 - `internal/cli` — builds the Cobra command tree. `root.go` registers the subcommands; `stdio.go` and `http.go` each own one transport.
 - `internal/mcpserver` — constructs the MCP server and registers the `random_int` tool. It knows nothing about transports.
-- `internal/templateinfo` — name and version metadata injected at build time.
+- `internal/templateinfo` — the single source of truth for the application name and title, and the derived `TEMPLATE_MCP_*` environment-variable prefix. Renaming the app to your project starts here. (Build metadata — version, commit, date — is separate: GoReleaser injects it via ldflags into `cmd/template-mcp/main.go`.)
 
 Both subcommands call `mcpserver.New(...)` and differ only in how they connect it to a transport, so swapping or deleting a transport never touches the tool or server code.
 

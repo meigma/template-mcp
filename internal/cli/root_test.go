@@ -45,7 +45,7 @@ func TestRootCommandRegistersTransportSubcommands(t *testing.T) {
 		got[cmd.Name()] = true
 	}
 
-	for _, name := range []string{"stdio", httpCommandName} {
+	for _, name := range []string{stdioCommandName, httpCommandName} {
 		if !got[name] {
 			t.Errorf("root command is missing the %q subcommand", name)
 		}

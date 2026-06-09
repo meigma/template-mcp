@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/meigma/template-mcp/compare/v0.1.1...v0.1.2) (2026-06-09)
+
+
+### Features
+
+* convert repository template into a Go MCP server template ([#1](https://github.com/meigma/template-mcp/issues/1)) ([190ddd8](https://github.com/meigma/template-mcp/commit/190ddd8217e66036daf6cc86413e041072376eaa))
+
 ## [0.1.1](https://github.com/meigma/template-mcp/compare/template-mcp-v0.1.0...template-mcp-v0.1.1) (2026-05-12)
 
 

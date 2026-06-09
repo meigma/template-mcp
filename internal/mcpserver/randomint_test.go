@@ -4,6 +4,9 @@ import (
 	"context"
 	"math"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRandomInt(t *testing.T) {
@@ -45,15 +48,10 @@ func assertRandomInt(t *testing.T, in randomIntInput, wantErr bool) {
 
 	_, out, err := randomInt(context.Background(), nil, in)
 	if wantErr {
-		if err == nil {
-			t.Fatalf("randomInt(%+v) error = nil, want error", in)
-		}
+		require.Error(t, err, "randomInt(%+v)", in)
 		return
 	}
-	if err != nil {
-		t.Fatalf("randomInt(%+v) error = %v, want nil", in, err)
-	}
-	if out.Value < in.Min || out.Value > in.Max {
-		t.Fatalf("randomInt(%+v) = %d, want within [%d, %d]", in, out.Value, in.Min, in.Max)
-	}
+	require.NoError(t, err, "randomInt(%+v)", in)
+	assert.GreaterOrEqual(t, out.Value, in.Min, "randomInt(%+v)", in)
+	assert.LessOrEqual(t, out.Value, in.Max, "randomInt(%+v)", in)
 }

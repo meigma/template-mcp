@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync/atomic"
 
 	"github.com/spf13/cobra"
@@ -32,43 +33,55 @@ func newStdioCommand(options Options) *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// CRITICAL: stdout is the JSON-RPC channel for this transport.
-			// Nothing in this code path may write to os.Stdout — a stray
-			// fmt.Println would corrupt the protocol. The server logs to stderr
-			// (see mcpserver.New); keep all diagnostics on stderr too.
-			srv := mcpserver.New(mcpserver.BuildInfo{Version: options.Build.Version})
-
-			// Drive the protocol over the command's streams rather than
-			// os.Stdin/os.Stdout directly, so the injectable Options.In/Out seam
-			// is real and the stdio path is testable. In production these resolve
-			// to os.Stdin/os.Stdout (see main.go); the closers are no-ops because
-			// the process, not this transport, owns those file descriptors.
-			input := &eofReader{reader: cmd.InOrStdin()}
-			transport := &mcp.IOTransport{
-				Reader: io.NopCloser(input),
-				Writer: nopWriteCloser{Writer: cmd.OutOrStdout()},
-			}
-
-			err := srv.Run(cmd.Context(), transport)
-			// Treat both normal stdio shutdowns as a clean (zero-status) exit;
-			// otherwise every routine disconnect would look like a crash.
-			//   - SIGINT/SIGTERM: the signal-derived context is cancelled and
-			//     Server.Run returns ctx.Err() (context.Canceled).
-			//   - The client closes the input stream (the MCP spec's primary way
-			//     to shut a stdio server down). When the client is idle at that
-			//     point, the SDK filters io.EOF and Run returns nil; but when the
-			//     client disconnects while a request is still in flight, Run
-			//     instead returns an internal "server is closing: EOF" error that
-			//     does NOT unwrap to io.EOF. Detecting the input EOF directly
-			//     covers both timings.
-			// Anything else is a real failure.
-			switch {
-			case err == nil, errors.Is(err, context.Canceled), input.sawEOF():
-				return nil
-			default:
-				return fmt.Errorf("run stdio server: %w", err)
-			}
+			return runStdio(cmd.Context(), options.Build, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
+	}
+}
+
+// runStdio serves the MCP server over the stdio transport until the context is
+// cancelled or the client closes the input stream, both of which are clean
+// shutdowns.
+//
+// CRITICAL: out is the JSON-RPC channel for this transport. Nothing in this
+// code path may write to it except the server — a stray print to stdout would
+// corrupt the protocol. All diagnostics, including the server's logs, go to
+// errOut.
+//
+// The protocol is driven over the provided streams rather than
+// [os.Stdin]/[os.Stdout] directly, so the injectable Options.In/Out seam is
+// real and the stdio path is testable. In production the streams resolve to
+// [os.Stdin]/[os.Stdout] (see main.go); the closers are no-ops because the
+// process, not this transport, owns those file descriptors.
+func runStdio(ctx context.Context, build BuildInfo, in io.Reader, out, errOut io.Writer) error {
+	srv := mcpserver.New(mcpserver.Options{
+		Version: build.Version,
+		Logger:  slog.New(slog.NewTextHandler(errOut, nil)),
+	})
+
+	input := &eofReader{reader: in}
+	transport := &mcp.IOTransport{
+		Reader: io.NopCloser(input),
+		Writer: nopWriteCloser{Writer: out},
+	}
+
+	err := srv.Run(ctx, transport)
+	// Treat both normal stdio shutdowns as a clean (zero-status) exit;
+	// otherwise every routine disconnect would look like a crash.
+	//   - SIGINT/SIGTERM: the signal-derived context is cancelled and
+	//     Server.Run returns ctx.Err() (context.Canceled).
+	//   - The client closes the input stream (the MCP spec's primary way
+	//     to shut a stdio server down). When the client is idle at that
+	//     point, the SDK filters io.EOF and Run returns nil; but when the
+	//     client disconnects while a request is still in flight, Run
+	//     instead returns an internal "server is closing: EOF" error that
+	//     does NOT unwrap to io.EOF. Detecting the input EOF directly
+	//     covers both timings.
+	// Anything else is a real failure.
+	switch {
+	case err == nil, errors.Is(err, context.Canceled), input.sawEOF():
+		return nil
+	default:
+		return fmt.Errorf("run stdio server: %w", err)
 	}
 }
 

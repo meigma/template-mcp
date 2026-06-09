@@ -5,6 +5,8 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -41,6 +43,20 @@ const (
 	demoTokenLifetime = time.Hour
 )
 
+// httpConfig carries the resolved http subcommand configuration into runHTTP.
+type httpConfig struct {
+	// build supplies the version reported to MCP clients.
+	build BuildInfo
+	// addr is the host:port to bind.
+	addr string
+	// authToken enables the DEMO-ONLY bearer middleware when non-empty.
+	authToken string
+	// insecure permits a non-loopback bind without authentication.
+	insecure bool
+	// logOut receives the MCP server's diagnostics.
+	logOut io.Writer
+}
+
 // newHTTPCommand builds the "http" subcommand, which serves the MCP server over
 // the Streamable HTTP transport for networked clients.
 //
@@ -56,10 +72,13 @@ func newHTTPCommand(options Options) *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			addr := options.Viper.GetString(addrFlag)
-			authToken := options.Viper.GetString(authTokenFlag)
-			insecure := options.Viper.GetBool(insecureFlag)
-			return runHTTP(cmd.Context(), options.Build, addr, authToken, insecure)
+			return runHTTP(cmd.Context(), httpConfig{
+				build:     options.Build,
+				addr:      options.Viper.GetString(addrFlag),
+				authToken: options.Viper.GetString(authTokenFlag),
+				insecure:  options.Viper.GetBool(insecureFlag),
+				logOut:    cmd.ErrOrStderr(),
+			})
 		},
 	}
 
@@ -85,10 +104,30 @@ func newHTTPCommand(options Options) *cobra.Command {
 	return cmd
 }
 
-func runHTTP(ctx context.Context, build BuildInfo, addr, authToken string, insecure bool) error {
-	if err := checkBindSecurity(addr, authToken, insecure); err != nil {
+// runHTTP validates the bind configuration, binds the listener, and serves the
+// MCP server on it until the context is cancelled.
+func runHTTP(ctx context.Context, cfg httpConfig) error {
+	if err := checkBindSecurity(cfg.addr, cfg.authToken, cfg.insecure); err != nil {
 		return err
 	}
+
+	// Bind separately from serving so configuration errors surface here, before
+	// the shutdown machinery starts, and so tests can serve on an ephemeral
+	// port (127.0.0.1:0).
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", cfg.addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", cfg.addr, err)
+	}
+
+	return serveHTTP(ctx, ln, cfg)
+}
+
+// serveHTTP serves the MCP server on the bound listener until the context is
+// cancelled, then shuts down gracefully, draining in-flight requests for up to
+// httpShutdownTimeout. The listener is closed by the time serveHTTP returns.
+func serveHTTP(ctx context.Context, ln net.Listener, cfg httpConfig) error {
+	logger := slog.New(slog.NewTextHandler(cfg.logOut, nil))
 
 	// The factory runs once per session, so each client gets a fresh server with
 	// no shared state — the safe default. If your tools need state shared across
@@ -96,7 +135,7 @@ func runHTTP(ctx context.Context, build BuildInfo, addr, authToken string, insec
 	// closure and return the same *mcp.Server for every request instead.
 	handler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server {
-			return mcpserver.New(mcpserver.BuildInfo{Version: build.Version})
+			return mcpserver.New(mcpserver.Options{Version: cfg.build.Version, Logger: logger})
 		},
 		nil,
 	)
@@ -104,19 +143,16 @@ func runHTTP(ctx context.Context, build BuildInfo, addr, authToken string, insec
 	// MUST: the SDK does NOT enable Origin verification by default. Wrapping the
 	// handler with the Go 1.25+ stdlib CrossOriginProtection rejects
 	// cross-origin browser requests, mitigating CSRF and DNS-rebinding attacks.
-	// CrossOriginProtection.Handler returns an http.Handler, so rootHandler is
-	// already the interface type and can be reassigned with the auth wrapper below.
 	rootHandler := http.NewCrossOriginProtection().Handler(handler)
 
 	// When a token is configured, gate the server behind the DEMO-ONLY bearer
 	// middleware. The middleware runs outside CrossOriginProtection so that
 	// unauthenticated requests are rejected as early as possible.
-	if authToken != "" {
-		rootHandler = requireBearerToken(authToken, addr)(rootHandler)
+	if cfg.authToken != "" {
+		rootHandler = requireBearerToken(cfg.authToken, cfg.addr)(rootHandler)
 	}
 
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           rootHandler,
 		ReadHeaderTimeout: httpReadHeaderTimeout,
 	}
@@ -124,8 +160,7 @@ func runHTTP(ctx context.Context, build BuildInfo, addr, authToken string, insec
 	// Graceful shutdown: when the context is cancelled (e.g. SIGINT/SIGTERM),
 	// stop accepting connections and let in-flight requests drain. The
 	// goroutine exits either way (ctx cancelled, or serveDone closed when
-	// ListenAndServe returns for another reason such as a bind failure), so it
-	// never leaks.
+	// Serve returns for another reason), so it never leaks.
 	serveDone := make(chan struct{})
 	shutdownErr := make(chan error, 1)
 	// G118 (gosec): the goroutine derives Shutdown's context from
@@ -145,7 +180,7 @@ func runHTTP(ctx context.Context, build BuildInfo, addr, authToken string, insec
 		}
 	}()
 
-	err := srv.ListenAndServe()
+	err := srv.Serve(ln)
 	close(serveDone)
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve http: %w", err)
@@ -227,7 +262,7 @@ func requireBearerToken(token, addr string) func(http.Handler) http.Handler {
 		// through timing. ConstantTimeCompare reports inequality for differing
 		// lengths, so no separate length check is needed.
 		if subtle.ConstantTimeCompare([]byte(presented), secret) != 1 {
-			return nil, fmt.Errorf("%w", auth.ErrInvalidToken)
+			return nil, auth.ErrInvalidToken
 		}
 
 		// The middleware requires a non-zero expiration and the configured

@@ -3,13 +3,20 @@ package cli
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// serverExitTimeout bounds how long tests wait for a serving function to
+// return after its shutdown trigger fires.
+const serverExitTimeout = 5 * time.Second
 
 func TestIsLoopbackHost(t *testing.T) {
 	t.Parallel()
@@ -33,9 +40,7 @@ func TestIsLoopbackHost(t *testing.T) {
 		t.Run(tt.addr, func(t *testing.T) {
 			t.Parallel()
 
-			if got := isLoopbackHost(tt.addr); got != tt.want {
-				t.Fatalf("isLoopbackHost(%q) = %v, want %v", tt.addr, got, tt.want)
-			}
+			assert.Equal(t, tt.want, isLoopbackHost(tt.addr))
 		})
 	}
 }
@@ -63,12 +68,11 @@ func TestCheckBindSecurity(t *testing.T) {
 			t.Parallel()
 
 			err := checkBindSecurity(tt.addr, tt.authToken, tt.insecure)
-			if tt.wantErr && err == nil {
-				t.Fatalf("checkBindSecurity(%q, %q, %v) = nil, want error", tt.addr, tt.authToken, tt.insecure)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
 			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("checkBindSecurity(%q, %q, %v) = %v, want nil", tt.addr, tt.authToken, tt.insecure, err)
-			}
+			require.NoError(t, err)
 		})
 	}
 }
@@ -113,16 +117,55 @@ func TestRequireBearerToken(t *testing.T) {
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
-			}
-			if reached != tt.wantReached {
-				t.Fatalf("handler reached = %v, want %v", reached, tt.wantReached)
-			}
-			if tt.wantChallenge && rec.Header().Get("WWW-Authenticate") == "" {
-				t.Fatal("missing WWW-Authenticate challenge header on rejection")
+			assert.Equal(t, tt.wantStatus, rec.Code)
+			assert.Equal(t, tt.wantReached, reached, "whether the wrapped handler is reached")
+			if tt.wantChallenge {
+				assert.NotEmpty(
+					t,
+					rec.Header().Get("WWW-Authenticate"),
+					"rejections must carry a WWW-Authenticate challenge",
+				)
 			}
 		})
+	}
+}
+
+// TestServeHTTPShutsDownOnContextCancel proves the graceful-shutdown path: a
+// running server stops accepting connections and serveHTTP returns nil (not an
+// error) when the context is cancelled, the same way a SIGINT/SIGTERM-derived
+// context behaves in production.
+func TestServeHTTPShutsDownOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err, "listen on an ephemeral port")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- serveHTTP(ctx, ln, httpConfig{
+			build:  BuildInfo{Version: "test"},
+			addr:   ln.Addr().String(),
+			logOut: io.Discard,
+		})
+	}()
+
+	// Prove the server is accepting requests before triggering shutdown. Any
+	// HTTP response demonstrates liveness; a plain GET without an MCP session
+	// is not a valid MCP request, so the status itself does not matter here.
+	resp, err := http.Get("http://" + ln.Addr().String() + "/")
+	require.NoError(t, err, "request to the running server")
+	require.NoError(t, resp.Body.Close())
+
+	cancel()
+
+	select {
+	case err := <-serveErr:
+		require.NoError(t, err, "context cancellation is a clean shutdown")
+	case <-time.After(serverExitTimeout):
+		t.Fatal("serveHTTP did not return after context cancellation")
 	}
 }
 
@@ -140,12 +183,8 @@ func TestHTTPCommandReadsAddrFromEnvironment(t *testing.T) {
 	root.SetErr(io.Discard)
 
 	err := root.ExecuteContext(context.Background())
-	if err == nil {
-		t.Fatal("expected the http command to refuse the non-loopback bind, got nil")
-	}
-	if !strings.Contains(err.Error(), "0.0.0.0:65535") {
-		t.Fatalf("error = %v, want it to mention the env-provided address", err)
-	}
+
+	require.ErrorContains(t, err, "0.0.0.0:65535", "the refusal must mention the env-provided address")
 }
 
 // TestEnvBindingResolvesHyphenatedFlag covers the SetEnvKeyReplacer hop that the
@@ -158,11 +197,7 @@ func TestEnvBindingResolvesHyphenatedFlag(t *testing.T) {
 
 	vp := viper.New()
 	httpCmd := newHTTPCommand(Options{Viper: vp})
-	if err := initializeConfig(httpCmd, vp); err != nil {
-		t.Fatalf("initializeConfig: %v", err)
-	}
+	require.NoError(t, initializeConfig(httpCmd, vp))
 
-	if got, want := vp.GetString(authTokenFlag), "from-env"; got != want {
-		t.Fatalf("auth-token from env = %q, want %q", got, want)
-	}
+	assert.Equal(t, "from-env", vp.GetString(authTokenFlag))
 }

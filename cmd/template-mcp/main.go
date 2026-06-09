@@ -10,11 +10,15 @@ import (
 	"github.com/meigma/template-mcp/internal/cli"
 )
 
-//nolint:gochecknoglobals // GoReleaser injects these values with ldflags during releases.
+// GoReleaser injects these values with ldflags during releases. When they are
+// left empty (plain go build or go run), cli.BuildInfo substitutes its
+// defaults, which keeps the fallback values in one place.
+//
+//nolint:gochecknoglobals // ldflags injection requires package-level variables.
 var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
+	version string
+	commit  string
+	date    string
 )
 
 func main() {
@@ -26,14 +30,14 @@ func run() int {
 	defer stop()
 
 	root := cli.NewRootCommand(cli.Options{
-		In: os.Stdin,
+		In:  os.Stdin,
+		Out: os.Stdout,
+		Err: os.Stderr,
 		Build: cli.BuildInfo{
 			Version: version,
 			Commit:  commit,
 			Date:    date,
 		},
-		Out: os.Stdout,
-		Err: os.Stderr,
 	})
 	if err := root.ExecuteContext(ctx); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)

@@ -17,9 +17,9 @@ const (
 	Title = "Meigma MCP server template"
 )
 
-// EnvPrefix is the prefix for the application's environment variables, for
-// example TEMPLATE_MCP_ADDR. It is derived from [Name] so a rename keeps the
-// command name and the environment variables in sync.
+// EnvPrefix returns the prefix for the application's environment variables,
+// for example TEMPLATE_MCP_ADDR. It is derived from [Name] so a rename keeps
+// the command name and the environment variables in sync.
 func EnvPrefix() string {
 	return strings.ToUpper(strings.ReplaceAll(Name, "-", "_"))
 }

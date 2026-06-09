@@ -82,7 +82,7 @@ The nominal generated-project path is a server with both a downloadable binary a
 
 4. Replace the demo tool.
 
-   `random_int` in `internal/mcpserver` is a placeholder that exists to prove the end-to-end tool path. Replace it with your own tool (typed input/output structs plus a handler registered via the SDK), or add more tools alongside it. Update `internal/mcpserver/tool_test.go` to match. The transport subcommands stay the same.
+   `random_int` in `internal/mcpserver` is a placeholder that exists to prove the end-to-end tool path. Replace it with your own tool (typed input/output structs plus a handler registered via the SDK), or add more tools alongside it; each tool lives in its own file (`randomint.go`) with a matching test file (`randomint_test.go`). The transport subcommands stay the same.
 
 5. Replace template placeholders:
 

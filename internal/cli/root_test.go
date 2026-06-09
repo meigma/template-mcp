@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestVersionFlagPrintsBuildMetadata(t *testing.T) {
@@ -24,15 +26,11 @@ func TestVersionFlagPrintsBuildMetadata(t *testing.T) {
 	})
 	root.SetArgs([]string{"--version"})
 
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("ExecuteContext returned an error: %v", err)
-	}
-	if got, want := stdout.String(), "template-mcp 0.1.0 (abc1234) built 2026-05-08T10:00:00Z\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
-	}
-	if got := stderr.String(); got != "" {
-		t.Fatalf("stderr = %q, want empty", got)
-	}
+	err := root.ExecuteContext(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, "template-mcp 0.1.0 (abc1234) built 2026-05-08T10:00:00Z\n", stdout.String())
+	assert.Empty(t, stderr.String(), "version output must not write to stderr")
 }
 
 func TestRootCommandRegistersTransportSubcommands(t *testing.T) {
@@ -40,39 +38,38 @@ func TestRootCommandRegistersTransportSubcommands(t *testing.T) {
 
 	root := NewRootCommand(Options{})
 
-	got := make(map[string]bool)
+	names := make([]string, 0, len(root.Commands()))
 	for _, cmd := range root.Commands() {
-		got[cmd.Name()] = true
+		names = append(names, cmd.Name())
 	}
 
-	for _, name := range []string{stdioCommandName, httpCommandName} {
-		if !got[name] {
-			t.Errorf("root command is missing the %q subcommand", name)
-		}
-	}
+	assert.Contains(t, names, stdioCommandName)
+	assert.Contains(t, names, httpCommandName)
 }
 
 func TestHTTPCommandDefaultsAddrToLoopback(t *testing.T) {
 	t.Parallel()
 
 	root := NewRootCommand(Options{})
+	httpCmd := findSubcommand(t, root, httpCommandName)
 
-	var httpCmd *cobra.Command
+	addr, err := httpCmd.Flags().GetString(addrFlag)
+
+	require.NoError(t, err)
+	assert.Equal(t, "localhost:8080", addr, "the default bind address must stay loopback")
+}
+
+// findSubcommand returns the named direct subcommand of root, failing the test
+// when it is not registered.
+func findSubcommand(t *testing.T, root *cobra.Command, name string) *cobra.Command {
+	t.Helper()
+
 	for _, cmd := range root.Commands() {
-		if cmd.Name() == httpCommandName {
-			httpCmd = cmd
-			break
+		if cmd.Name() == name {
+			return cmd
 		}
 	}
-	if httpCmd == nil {
-		t.Fatal("root command is missing the http subcommand")
-	}
 
-	addr, err := httpCmd.Flags().GetString("addr")
-	if err != nil {
-		t.Fatalf("get addr flag: %v", err)
-	}
-	if want := "localhost:8080"; addr != want {
-		t.Fatalf("addr default = %q, want %q", addr, want)
-	}
+	t.Fatalf("root command is missing the %q subcommand", name)
+	return nil
 }

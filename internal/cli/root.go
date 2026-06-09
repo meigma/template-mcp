@@ -1,3 +1,12 @@
+// Package cli builds the template-mcp command tree.
+//
+// The root command wires two transport subcommands onto the same
+// transport-agnostic MCP server from internal/mcpserver: stdio, for clients
+// that spawn the process and speak JSON-RPC over its standard streams, and
+// http, for networked clients using the Streamable HTTP transport. Each
+// transport lives in its own file (stdio.go, http.go) so a consumer can keep
+// one transport and delete the other by removing a single file and its
+// registration in [NewRootCommand].
 package cli
 
 import (
@@ -23,16 +32,20 @@ type BuildInfo struct {
 
 // Options customizes root command construction.
 type Options struct {
-	// In receives interactive command input.
+	// In supplies the command input stream. For the stdio transport this is
+	// the client's JSON-RPC message stream.
 	In io.Reader
-	// Out receives machine-readable command output.
+	// Out receives machine-readable command output, including the stdio
+	// transport's JSON-RPC messages.
 	Out io.Writer
-	// Err receives diagnostics and human-readable status.
+	// Err receives diagnostics and human-readable status, including the MCP
+	// server's logs.
 	Err io.Writer
 	// Build controls the root command version output.
 	Build BuildInfo
-	// Viper is the configuration instance used by the command tree. It binds
-	// flags to TEMPLATE_MCP_* environment variables.
+	// Viper is the configuration instance used by the command tree. Flags are
+	// bound to environment variables named after [templateinfo.EnvPrefix],
+	// for example TEMPLATE_MCP_ADDR.
 	Viper *viper.Viper
 }
 

@@ -16,28 +16,35 @@ import (
 	"github.com/meigma/template-mcp/internal/templateinfo"
 )
 
-// BuildInfo describes linker-injected build metadata surfaced to MCP clients.
-type BuildInfo struct {
+// Options configures the template MCP server.
+type Options struct {
 	// Version is the release version reported in the server implementation info.
 	Version string
+
+	// Logger receives server diagnostics. Nil selects a text handler writing
+	// to [os.Stderr].
+	//
+	// WARNING: a logger must never write to [os.Stdout]. The stdio transport
+	// reserves stdout for the JSON-RPC message stream, so a single log line
+	// there corrupts the protocol. Writing to stderr (the default) is safe for
+	// every transport.
+	Logger *slog.Logger
 }
 
 // New constructs the template MCP server and registers its tools.
 //
-// The server logs to [os.Stderr]. This is deliberate and required: the stdio
-// transport reserves [os.Stdout] for the JSON-RPC message stream, so any log
-// written to stdout would corrupt the protocol. Logging to stderr is correct
-// for both transports, so it is wired uniformly here.
-//
 // New is transport-agnostic; callers choose a transport when they run the
-// returned server (see internal/cli).
-func New(build BuildInfo) *mcp.Server {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+// returned server (see internal/cli). Diagnostics go to [Options.Logger].
+func New(options Options) *mcp.Server {
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
+	}
 
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    templateinfo.Name,
 		Title:   templateinfo.Title,
-		Version: build.Version,
+		Version: options.Version,
 	}, &mcp.ServerOptions{
 		Logger: logger,
 	})

@@ -3,7 +3,11 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -16,28 +20,12 @@ func TestServerEndToEnd(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-
-	srv := New(BuildInfo{Version: "test"})
-	serverSession, err := srv.Connect(ctx, serverTransport, nil)
-	if err != nil {
-		t.Fatalf("server connect: %v", err)
-	}
-	defer serverSession.Close()
-
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
-	clientSession, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	defer clientSession.Close()
+	session := newClientSession(t)
 
 	// tools/list: random_int must be present with a non-null input schema.
-	tools, err := clientSession.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatalf("list tools: %v", err)
-	}
+	tools, err := session.ListTools(ctx, nil)
+	require.NoError(t, err, "list tools")
+
 	var randomIntTool *mcp.Tool
 	for _, tool := range tools.Tools {
 		if tool.Name == "random_int" {
@@ -45,38 +33,25 @@ func TestServerEndToEnd(t *testing.T) {
 			break
 		}
 	}
-	if randomIntTool == nil {
-		t.Fatal("tools/list did not include random_int")
-	}
-	if randomIntTool.InputSchema == nil {
-		t.Fatal("random_int InputSchema is nil, want a JSON Schema object")
-	}
+	require.NotNil(t, randomIntTool, "tools/list must include random_int")
+	require.NotNil(t, randomIntTool.InputSchema, "random_int must publish a JSON Schema object")
 
 	// tools/call: the structured Value must fall within the requested range.
 	const wantMin, wantMax = 3, 7
-	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "random_int",
 		Arguments: map[string]any{"min": wantMin, "max": wantMax},
 	})
-	if err != nil {
-		t.Fatalf("call tool: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("call tool returned IsError, content: %+v", result.Content)
-	}
+	require.NoError(t, err, "call tool")
+	require.False(t, result.IsError, "tool call failed, content: %+v", result.Content)
 
 	// StructuredContent round-trips through JSON; decode it into the typed shape.
 	var out randomIntOutput
 	raw, err := json.Marshal(result.StructuredContent)
-	if err != nil {
-		t.Fatalf("marshal structured content: %v", err)
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("unmarshal structured content %q: %v", raw, err)
-	}
-	if out.Value < wantMin || out.Value > wantMax {
-		t.Fatalf("random_int value = %d, want within [%d, %d]", out.Value, wantMin, wantMax)
-	}
+	require.NoError(t, err, "marshal structured content")
+	require.NoError(t, json.Unmarshal(raw, &out), "unmarshal structured content %q", raw)
+	assert.GreaterOrEqual(t, out.Value, wantMin)
+	assert.LessOrEqual(t, out.Value, wantMax)
 }
 
 // TestServerEndToEndToolError verifies the tool-error convention: an invalid
@@ -84,32 +59,35 @@ func TestServerEndToEnd(t *testing.T) {
 func TestServerEndToEndToolError(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	session := newClientSession(t)
 
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-
-	srv := New(BuildInfo{Version: "test"})
-	serverSession, err := srv.Connect(ctx, serverTransport, nil)
-	if err != nil {
-		t.Fatalf("server connect: %v", err)
-	}
-	defer serverSession.Close()
-
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
-	clientSession, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	defer clientSession.Close()
-
-	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "random_int",
 		Arguments: map[string]any{"min": 10, "max": 1},
 	})
-	if err != nil {
-		t.Fatalf("call tool returned a protocol error, want tool-level error: %v", err)
-	}
-	if !result.IsError {
-		t.Fatal("call tool result IsError = false, want true for min > max")
-	}
+
+	require.NoError(t, err, "min > max must be a tool-level error, not a protocol error")
+	assert.True(t, result.IsError, "call tool result must set IsError for min > max")
+}
+
+// newClientSession connects an MCP client to a freshly constructed template
+// server over the SDK's in-memory transport pair and returns the client side,
+// closing both sessions when the test finishes.
+func newClientSession(t *testing.T) *mcp.ClientSession {
+	t.Helper()
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+
+	srv := New(Options{Version: "test", Logger: slog.New(slog.DiscardHandler)})
+	serverSession, err := srv.Connect(ctx, serverTransport, nil)
+	require.NoError(t, err, "server connect")
+	t.Cleanup(func() { _ = serverSession.Close() })
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	require.NoError(t, err, "client connect")
+	t.Cleanup(func() { _ = clientSession.Close() })
+
+	return clientSession
 }

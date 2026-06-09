@@ -1,0 +1,84 @@
+language: 'go'
+layer: 'application'
+stack: 'backend'
+
+project:
+  title: 'template-go'
+  description: 'Meigma Go repository template.'
+  owner: 'meigma'
+  maintainers:
+    - 'meigma'
+
+toolchains:
+  default: 'go'
+
+fileGroups:
+  goSources:
+    - 'cmd/**/*.go'
+    - 'internal/**/*.go'
+    - 'go.mod'
+    - 'go.sum'
+  lintConfig:
+    - '.golangci.yml'
+    - '.prototools'
+    - '.moon/proto/golangci-lint.toml'
+  releaseConfig:
+    - '.goreleaser.yaml'
+    - 'ghd.toml'
+    - 'release-please-config.json'
+    - '.release-please-manifest.json'
+    - '.github/workflows.disabled/**/*.yml'
+
+workspace:
+  inheritedTasks:
+    include: []
+
+tasks:
+  format:
+    command: 'proto run golangci-lint -- fmt --config .golangci.yml --diff'
+    toolchains: ['go']
+    inputs:
+      - '@group(goSources)'
+      - '@group(lintConfig)'
+    options:
+      cache: false
+
+  lint:
+    command: 'proto run golangci-lint -- run --config .golangci.yml ./... --show-stats=false'
+    toolchains: ['go']
+    inputs:
+      - '@group(goSources)'
+      - '@group(lintConfig)'
+    options:
+      cache: false
+
+  build:
+    command: 'go build -o bin/template-go ./cmd/template-go'
+    toolchains: ['go']
+    inputs:
+      - '@group(goSources)'
+    outputs:
+      - 'bin/template-go'
+
+  test:
+    command: 'go test ./...'
+    toolchains: ['go']
+    inputs:
+      - '@group(goSources)'
+    options:
+      cache: false
+
+  check:
+    deps:
+      - 'root:format'
+      - 'root:lint'
+      - 'root:build'
+      - 'root:test'
+      - 'docs:build'
+    inputs:
+      - '@group(goSources)'
+      - '@group(lintConfig)'
+      - '@group(releaseConfig)'
+    options:
+      cache: false
+      runInCI: true

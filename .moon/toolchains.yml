@@ -1,0 +1,22 @@
+# Active toolchains for the current template.
+
+go:
+  version: '1.26.4'
+
+unstable_python:
+  version: '3.14.3'
+  packageManager: 'uv'
+  venvName: '.venv'
+
+unstable_uv:
+  version: '0.11.0'
+
+# Stable non-JavaScript toolchains in Moon v2.
+# rust:
+#   version: 'REPLACE_ME_RUST_VERSION'
+#   components: ['clippy', 'rustfmt']
+
+# JavaScript ecosystems can be added later if a generated project needs them.
+# javascript:
+#   packageManager: 'pnpm'
+#   inferTasksFromScripts: true

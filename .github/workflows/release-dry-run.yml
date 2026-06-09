@@ -1,0 +1,257 @@
+# This workflow rehearses the release paths without uploading GitHub release
+# assets or publishing container images. It is intended for release PRs and
+# manual checks before changing release automation.
+#
+# Keep the pull_request trigger broad so required check contexts still report
+# on normal PRs. The jobs intentionally skip unless the PR head branch is a
+# Release Please branch, which avoids spending runner time on routine changes.
+
+name: Release Dry Run
+
+on:
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  binary-release-dry-run:
+    name: Binary Release Dry Run
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'release-please--') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+      - name: Create synthetic release tag
+        env:
+          DRY_RUN_TAG: v0.0.0-dryrun.${{ github.run_id }}.${{ github.run_attempt }}
+        run: |
+          git tag -f "$DRY_RUN_TAG"
+
+      - name: Run GoReleaser without publishing
+        uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GORELEASER_CURRENT_TAG: v0.0.0-dryrun.${{ github.run_id }}.${{ github.run_attempt }}
+
+      - name: Validate ghd-compatible dry-run artifacts
+        run: |
+          set -euo pipefail
+
+          version="0.0.0-dryrun.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          binary_name="template-go"
+          asset_prefix="${binary_name}_"
+          expected_signer="${GITHUB_REPOSITORY}/.github/workflows/release.yml"
+          actual_signer="$(awk -F'"' '/signer_workflow/ { print $2; exit }' ghd.toml)"
+
+          if [ "$actual_signer" != "$expected_signer" ]; then
+            echo "ghd.toml signer_workflow must be $expected_signer, got $actual_signer" >&2
+            exit 1
+          fi
+
+          grep -Fq "name = \"$binary_name\"" ghd.toml
+          grep -Fq "tag_pattern = \"v\${version}\"" ghd.toml
+          grep -Fq "path = \"$binary_name\"" ghd.toml
+
+          jq -e --arg asset_prefix "$asset_prefix" '
+            [
+              .[]
+              | select(
+                  (.type == "Binary" and (.name | startswith($asset_prefix))) or
+                  (.type == "SBOM" and (.name | startswith($asset_prefix))) or
+                  (.type == "Checksum" and .name == "checksums.txt")
+                )
+            ] as $artifacts
+            | ($artifacts | map(select(.type == "Binary")) | length) == 4
+            and ($artifacts | map(select(.type == "SBOM")) | length) == 4
+            and ($artifacts | map(select(.type == "Checksum")) | length) == 1
+          ' dist/artifacts.json
+
+          test -f dist/checksums.txt
+
+          for os in darwin linux; do
+            for arch in amd64 arm64; do
+              expected="${binary_name}_${version}_${os}_${arch}"
+              expected_sbom="${expected}.sbom.json"
+              expected_pattern="pattern = \"${binary_name}_\${version}_${os}_${arch}\""
+
+              jq -e --arg name "$expected" '.[] | select(.type == "Binary" and .name == $name)' dist/artifacts.json >/dev/null
+              jq -e --arg name "$expected_sbom" '.[] | select(.type == "SBOM" and .name == $name)' dist/artifacts.json >/dev/null
+              grep -Fq "$expected_pattern" ghd.toml
+              awk -v name="$expected" '$2 == name && length($1) == 64 && $1 ~ /^[[:xdigit:]]+$/ { found = 1 } END { exit(found ? 0 : 1) }' dist/checksums.txt
+            done
+          done
+
+      - name: Smoke test dry-run binary
+        run: |
+          set -euo pipefail
+
+          version="0.0.0-dryrun.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          binary_name="template-go"
+          host_os="$(go env GOHOSTOS)"
+          host_arch="$(go env GOHOSTARCH)"
+          expected="${binary_name}_${version}_${host_os}_${host_arch}"
+          bin="$(jq -r --arg name "$expected" '.[] | select(.type == "Binary" and .name == $name) | .path' dist/artifacts.json)"
+
+          if [ -z "$bin" ] || [ "$bin" = "null" ] || [ ! -f "$bin" ]; then
+            echo "failed to locate host binary artifact $expected" >&2
+            jq . dist/artifacts.json >&2
+            exit 1
+          fi
+
+          output="$("$bin" --version)"
+          printf '%s\n' "$output"
+
+          case "$output" in
+            "$binary_name "*"$version"*) ;;
+            *) echo "unexpected version output: $output" >&2; exit 1 ;;
+          esac
+
+  container-image-platform-dry-run:
+    name: Container Image Platform Dry Run (${{ matrix.platform }})
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'release-please--') }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve dry-run metadata
+        id: dry-run
+        env:
+          DRY_RUN_VERSION: 0.0.0-dryrun.${{ github.run_id }}.${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          echo "version=${DRY_RUN_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build platform OCI archive
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          push: false
+          platforms: ${{ matrix.platform }}
+          outputs: type=oci,dest=/tmp/template-go-dry-run-${{ matrix.arch }}.oci
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=template-go-release-dry-run-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=template-go-release-dry-run-${{ matrix.arch }}
+          build-args: |
+            VERSION=${{ steps.dry-run.outputs.version }}
+            COMMIT=${{ steps.dry-run.outputs.commit }}
+            DATE=${{ steps.dry-run.outputs.date }}
+            SOURCE=https://github.com/${{ github.repository }}
+
+      - name: Validate platform OCI archive
+        run: test -s /tmp/template-go-dry-run-${{ matrix.arch }}.oci
+
+  container-image-dry-run:
+    name: Container Image Dry Run
+    needs:
+      - container-image-platform-dry-run
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'release-please--')) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check platform dry-run result
+        env:
+          PLATFORM_RESULT: ${{ needs.container-image-platform-dry-run.result }}
+        run: |
+          set -euo pipefail
+
+          if [ "$PLATFORM_RESULT" != "success" ]; then
+            echo "container platform dry-run result was $PLATFORM_RESULT" >&2
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve dry-run metadata
+        id: dry-run
+        env:
+          DRY_RUN_VERSION: 0.0.0-dryrun.${{ github.run_id }}.${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          echo "version=${DRY_RUN_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build Docker test target
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          target: test
+          push: false
+          cache-from: type=gha,scope=template-go-release-dry-run-amd64
+          cache-to: type=gha,mode=max,scope=template-go-release-dry-run-amd64
+
+      - name: Build local smoke-test image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          tags: template-go:dry-run
+          cache-from: type=gha,scope=template-go-release-dry-run-amd64
+          cache-to: type=gha,mode=max,scope=template-go-release-dry-run-amd64
+          build-args: |
+            VERSION=${{ steps.dry-run.outputs.version }}
+            COMMIT=${{ steps.dry-run.outputs.commit }}
+            DATE=${{ steps.dry-run.outputs.date }}
+            SOURCE=https://github.com/${{ github.repository }}
+
+      - name: Smoke test local image
+        run: |
+          set -euo pipefail
+
+          docker run --rm template-go:dry-run --version
+          docker run --rm template-go:dry-run --message "hello from container"

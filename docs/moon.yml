@@ -1,0 +1,61 @@
+language: 'python'
+layer: 'application'
+stack: 'frontend'
+tags:
+  - 'docs'
+  - 'mkdocs'
+  - 'uv'
+
+project:
+  title: 'template-go docs'
+  description: 'MkDocs documentation site for the Meigma Go repository template.'
+  owner: 'meigma'
+  maintainers:
+    - 'meigma'
+
+toolchains:
+  default: 'unstable_python'
+
+fileGroups:
+  configs:
+    - 'mkdocs.yml'
+    - 'pyproject.toml'
+    - 'uv.lock'
+    - '.python-version'
+  sources:
+    - 'docs/**/*'
+
+tasks:
+  install:
+    command: 'uv sync --locked'
+    toolchains: ['unstable_python', 'unstable_uv']
+    inputs:
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.python-version'
+    outputs:
+      - '.venv/pyvenv.cfg'
+    options:
+      cache: false
+
+  build:
+    command: 'uv run --locked mkdocs build --strict'
+    toolchains: ['unstable_python', 'unstable_uv']
+    deps:
+      - 'docs:install'
+    inputs:
+      - '@group(configs)'
+      - '@group(sources)'
+    outputs:
+      - 'build/**/*'
+
+  serve:
+    command: 'uv run --locked mkdocs serve --dev-addr 127.0.0.1:8000'
+    toolchains: ['unstable_python', 'unstable_uv']
+    deps:
+      - 'docs:install'
+    inputs:
+      - '@group(configs)'
+      - '@group(sources)'
+    options:
+      cache: false

@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
 
           version="0.0.0-dryrun.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
-          binary_name="template-go"
+          binary_name="template-mcp"
           asset_prefix="${binary_name}_"
           expected_signer="${GITHUB_REPOSITORY}/.github/workflows/release.yml"
           actual_signer="$(awk -F'"' '/signer_workflow/ { print $2; exit }' ghd.toml)"
@@ -108,7 +108,7 @@ jobs:
           set -euo pipefail
 
           version="0.0.0-dryrun.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
-          binary_name="template-go"
+          binary_name="template-mcp"
           host_os="$(go env GOHOSTOS)"
           host_arch="$(go env GOHOSTARCH)"
           expected="${binary_name}_${version}_${host_os}_${host_arch}"
@@ -171,11 +171,11 @@ jobs:
           context: .
           push: false
           platforms: ${{ matrix.platform }}
-          outputs: type=oci,dest=/tmp/template-go-dry-run-${{ matrix.arch }}.oci
+          outputs: type=oci,dest=/tmp/template-mcp-dry-run-${{ matrix.arch }}.oci
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=template-go-release-dry-run-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=template-go-release-dry-run-${{ matrix.arch }}
+          cache-from: type=gha,scope=template-mcp-release-dry-run-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=template-mcp-release-dry-run-${{ matrix.arch }}
           build-args: |
             VERSION=${{ steps.dry-run.outputs.version }}
             COMMIT=${{ steps.dry-run.outputs.commit }}
@@ -183,7 +183,7 @@ jobs:
             SOURCE=https://github.com/${{ github.repository }}
 
       - name: Validate platform OCI archive
-        run: test -s /tmp/template-go-dry-run-${{ matrix.arch }}.oci
+        run: test -s /tmp/template-mcp-dry-run-${{ matrix.arch }}.oci
 
   container-image-dry-run:
     name: Container Image Dry Run
@@ -231,8 +231,8 @@ jobs:
           context: .
           target: test
           push: false
-          cache-from: type=gha,scope=template-go-release-dry-run-amd64
-          cache-to: type=gha,mode=max,scope=template-go-release-dry-run-amd64
+          cache-from: type=gha,scope=template-mcp-release-dry-run-amd64
+          cache-to: type=gha,mode=max,scope=template-mcp-release-dry-run-amd64
 
       - name: Build local smoke-test image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -240,9 +240,9 @@ jobs:
           context: .
           load: true
           platforms: linux/amd64
-          tags: template-go:dry-run
-          cache-from: type=gha,scope=template-go-release-dry-run-amd64
-          cache-to: type=gha,mode=max,scope=template-go-release-dry-run-amd64
+          tags: template-mcp:dry-run
+          cache-from: type=gha,scope=template-mcp-release-dry-run-amd64
+          cache-to: type=gha,mode=max,scope=template-mcp-release-dry-run-amd64
           build-args: |
             VERSION=${{ steps.dry-run.outputs.version }}
             COMMIT=${{ steps.dry-run.outputs.commit }}
@@ -253,5 +253,5 @@ jobs:
         run: |
           set -euo pipefail
 
-          docker run --rm template-go:dry-run --version
-          docker run --rm template-go:dry-run --message "hello from container"
+          docker run --rm template-mcp:dry-run --version
+          docker run --rm template-mcp:dry-run --help

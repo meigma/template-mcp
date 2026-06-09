@@ -5,7 +5,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/spf13/viper"
+	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestVersionFlagPrintsBuildMetadata(t *testing.T) {
@@ -24,48 +26,50 @@ func TestVersionFlagPrintsBuildMetadata(t *testing.T) {
 	})
 	root.SetArgs([]string{"--version"})
 
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("ExecuteContext returned an error: %v", err)
-	}
-	if got, want := stdout.String(), "template-go 0.1.0 (abc1234) built 2026-05-08T10:00:00Z\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
-	}
-	if got := stderr.String(); got != "" {
-		t.Fatalf("stderr = %q, want empty", got)
-	}
+	err := root.ExecuteContext(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, "template-mcp 0.1.0 (abc1234) built 2026-05-08T10:00:00Z\n", stdout.String())
+	assert.Empty(t, stderr.String(), "version output must not write to stderr")
 }
 
-func TestRootCommandPrintsConfiguredMessage(t *testing.T) {
+func TestRootCommandRegistersTransportSubcommands(t *testing.T) {
 	t.Parallel()
 
-	var stdout bytes.Buffer
-	root := NewRootCommand(Options{
-		Out:   &stdout,
-		Viper: viper.New(),
-	})
-	root.SetArgs([]string{"--message", "hello from cobra"})
+	root := NewRootCommand(Options{})
 
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("ExecuteContext returned an error: %v", err)
+	names := make([]string, 0, len(root.Commands()))
+	for _, cmd := range root.Commands() {
+		names = append(names, cmd.Name())
 	}
-	if got, want := stdout.String(), "hello from cobra\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
-	}
+
+	assert.Contains(t, names, stdioCommandName)
+	assert.Contains(t, names, httpCommandName)
 }
 
-func TestRootCommandReadsMessageFromEnvironment(t *testing.T) {
-	t.Setenv("TEMPLATE_GO_MESSAGE", "hello from viper")
+func TestHTTPCommandDefaultsAddrToLoopback(t *testing.T) {
+	t.Parallel()
 
-	var stdout bytes.Buffer
-	root := NewRootCommand(Options{
-		Out:   &stdout,
-		Viper: viper.New(),
-	})
+	root := NewRootCommand(Options{})
+	httpCmd := findSubcommand(t, root, httpCommandName)
 
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("ExecuteContext returned an error: %v", err)
+	addr, err := httpCmd.Flags().GetString(addrFlag)
+
+	require.NoError(t, err)
+	assert.Equal(t, "localhost:8080", addr, "the default bind address must stay loopback")
+}
+
+// findSubcommand returns the named direct subcommand of root, failing the test
+// when it is not registered.
+func findSubcommand(t *testing.T, root *cobra.Command, name string) *cobra.Command {
+	t.Helper()
+
+	for _, cmd := range root.Commands() {
+		if cmd.Name() == name {
+			return cmd
+		}
 	}
-	if got, want := stdout.String(), "hello from viper\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
-	}
+
+	t.Fatalf("root command is missing the %q subcommand", name)
+	return nil
 }

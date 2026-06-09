@@ -1,3 +1,12 @@
+// Package cli builds the template-mcp command tree.
+//
+// The root command wires two transport subcommands onto the same
+// transport-agnostic MCP server from internal/mcpserver: stdio, for clients
+// that spawn the process and speak JSON-RPC over its standard streams, and
+// http, for networked clients using the Streamable HTTP transport. Each
+// transport lives in its own file (stdio.go, http.go) so a consumer can keep
+// one transport and delete the other by removing a single file and its
+// registration in [NewRootCommand].
 package cli
 
 import (
@@ -8,8 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/meigma/template-go/internal/config"
-	"github.com/meigma/template-go/internal/templateinfo"
+	"github.com/meigma/template-mcp/internal/templateinfo"
 )
 
 // BuildInfo describes linker-injected build metadata printed by --version.
@@ -24,19 +32,29 @@ type BuildInfo struct {
 
 // Options customizes root command construction.
 type Options struct {
-	// In receives interactive command input.
+	// In supplies the command input stream. For the stdio transport this is
+	// the client's JSON-RPC message stream.
 	In io.Reader
-	// Out receives machine-readable command output.
+	// Out receives machine-readable command output, including the stdio
+	// transport's JSON-RPC messages.
 	Out io.Writer
-	// Err receives diagnostics and human-readable status.
+	// Err receives diagnostics and human-readable status, including the MCP
+	// server's logs.
 	Err io.Writer
 	// Build controls the root command version output.
 	Build BuildInfo
-	// Viper is the configuration instance used by the command tree.
+	// Viper is the configuration instance used by the command tree. Flags are
+	// bound to environment variables named after [templateinfo.EnvPrefix],
+	// for example TEMPLATE_MCP_ADDR.
 	Viper *viper.Viper
 }
 
-// NewRootCommand creates the template-go Cobra command tree.
+// NewRootCommand creates the template-mcp Cobra command tree.
+//
+// The root command does no work on its own; it wires the two transport
+// subcommands (stdio and http) onto the same MCP server. To produce a
+// single-transport repository, delete the unwanted subcommand file and its
+// registration call below.
 func NewRootCommand(options Options) *cobra.Command {
 	if options.In == nil {
 		options.In = strings.NewReader("")
@@ -53,22 +71,19 @@ func NewRootCommand(options Options) *cobra.Command {
 	options.Build = options.Build.withDefaults()
 
 	root := &cobra.Command{
-		Use:           "template-go",
-		Short:         "Meigma Go repository template application",
+		Use:           templateinfo.Name,
+		Short:         templateinfo.Title,
 		Version:       options.Build.Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			return initializeConfig(cmd, options.Viper)
 		},
-		RunE: func(_ *cobra.Command, _ []string) error {
-			cfg := config.Load(options.Viper)
-			return printLine(options.Out, cfg.Message)
-		},
 	}
 	root.SetVersionTemplate(
 		fmt.Sprintf(
-			"template-go %s (%s) built %s\n",
+			"%s %s (%s) built %s\n",
+			templateinfo.Name,
 			options.Build.Version,
 			options.Build.Commit,
 			options.Build.Date,
@@ -77,7 +92,10 @@ func NewRootCommand(options Options) *cobra.Command {
 	root.SetIn(options.In)
 	root.SetOut(options.Out)
 	root.SetErr(options.Err)
-	root.PersistentFlags().String("message", templateinfo.Summary(), "message to print")
+
+	root.AddCommand(newStdioCommand(options))
+	root.AddCommand(newHTTPCommand(options))
+
 	return root
 }
 
@@ -95,7 +113,7 @@ func (b BuildInfo) withDefaults() BuildInfo {
 }
 
 func initializeConfig(cmd *cobra.Command, vp *viper.Viper) error {
-	vp.SetEnvPrefix("TEMPLATE_GO")
+	vp.SetEnvPrefix(templateinfo.EnvPrefix())
 	vp.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 	vp.AutomaticEnv()
 
@@ -104,14 +122,6 @@ func initializeConfig(cmd *cobra.Command, vp *viper.Viper) error {
 	}
 	if err := vp.BindPFlags(cmd.Flags()); err != nil {
 		return fmt.Errorf("bind flags: %w", err)
-	}
-
-	return nil
-}
-
-func printLine(w io.Writer, line string) error {
-	if _, err := fmt.Fprintln(w, line); err != nil {
-		return fmt.Errorf("write output: %w", err)
 	}
 
 	return nil

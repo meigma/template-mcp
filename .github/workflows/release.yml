@@ -19,7 +19,7 @@ on:
 permissions: {}
 
 env:
-  IMAGE_NAME: ghcr.io/meigma/template-go
+  IMAGE_NAME: ghcr.io/meigma/template-mcp
 
 jobs:
   resolve-release:
@@ -122,7 +122,7 @@ jobs:
           set -euo pipefail
 
           version="${RELEASE_TAG#v}"
-          binary_name="template-go"
+          binary_name="template-mcp"
           host_os="$(go env GOHOSTOS)"
           host_arch="$(go env GOHOSTARCH)"
           bin="dist/release-assets/${binary_name}_${version}_${host_os}_${host_arch}"
@@ -219,8 +219,8 @@ jobs:
           tags: |
             type=raw,value=${{ needs.resolve-release.outputs.tag }}
           labels: |
-            org.opencontainers.image.title=template-go
-            org.opencontainers.image.description=Meigma Go repository template application
+            org.opencontainers.image.title=template-mcp
+            org.opencontainers.image.description=Meigma Go MCP server template
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ needs.resolve-release.outputs.version }}
             org.opencontainers.image.revision=${{ steps.image.outputs.commit }}
@@ -235,8 +235,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=template-go-release-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=template-go-release-${{ matrix.arch }}
+          cache-from: type=gha,scope=template-mcp-release-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=template-mcp-release-${{ matrix.arch }}
           build-args: |
             VERSION=${{ steps.image.outputs.version }}
             COMMIT=${{ steps.image.outputs.commit }}
@@ -250,7 +250,7 @@ jobs:
           set -euo pipefail
 
           docker run --rm --platform "${{ matrix.platform }}" "$IMAGE_REF" --version
-          docker run --rm --platform "${{ matrix.platform }}" "$IMAGE_REF" --message "hello from container"
+          docker run --rm --platform "${{ matrix.platform }}" "$IMAGE_REF" --help
 
       - name: Export platform digest
         env:
@@ -376,7 +376,7 @@ jobs:
           set -euo pipefail
 
           docker run --rm "${{ steps.manifest.outputs.tag }}" --version
-          docker run --rm "${{ steps.manifest.outputs.tag }}" --message "hello from container"
+          docker run --rm "${{ steps.manifest.outputs.tag }}" --help
 
       - name: Attest container image
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
@@ -410,9 +410,9 @@ jobs:
             echo
             echo '```sh'
             echo "gh release view $RELEASE_TAG --repo $GITHUB_REPOSITORY --json isDraft,assets"
-            echo "asset=\"template-go_${RELEASE_VERSION}_\$(go env GOOS)_\$(go env GOARCH)\""
+            echo "asset=\"template-mcp_${RELEASE_VERSION}_\$(go env GOOS)_\$(go env GOARCH)\""
             echo "gh attestation verify \"dist/release-assets/\${asset}\" --repo \"$GITHUB_REPOSITORY\" --signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/release.yml\" --source-ref \"refs/tags/$RELEASE_TAG\" --deny-self-hosted-runners"
-            echo "ghd download \"$GITHUB_REPOSITORY/template-go@${RELEASE_VERSION}\" --output \"\$(mktemp -d)\""
+            echo "ghd download \"$GITHUB_REPOSITORY/template-mcp@${RELEASE_VERSION}\" --output \"\$(mktemp -d)\""
             echo '```'
             echo
             echo "Container verification commands:"

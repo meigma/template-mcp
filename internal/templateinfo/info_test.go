@@ -1,12 +1,13 @@
 package templateinfo
 
-import "testing"
+import (
+	"testing"
 
-func TestSummary(t *testing.T) {
+	"github.com/stretchr/testify/assert"
+)
+
+func TestEnvPrefix(t *testing.T) {
 	t.Parallel()
 
-	got := Summary()
-	if got == "" {
-		t.Fatal("Summary returned an empty string")
-	}
+	assert.Equal(t, "TEMPLATE_MCP", EnvPrefix())
 }

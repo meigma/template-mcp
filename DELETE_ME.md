@@ -1,15 +1,16 @@
-# Welcome to the Meigma Go Template
+# Welcome to the Meigma MCP Server Template
 
-This repository was generated from `template-go`, the standard starter for Meigma Go projects.
-It is meant to give new repositories a working baseline on day one: a small Go CLI by default, Moon task orchestration, pinned CI, dependency automation, repository security defaults, and an enabled release pipeline that has already been exercised by the template application.
+This repository was generated from `template-mcp`, the standard starter for Meigma [Model Context Protocol](https://modelcontextprotocol.io) servers.
+It gives a new MCP server a working baseline on day one: a transport-agnostic server built on the official `modelcontextprotocol/go-sdk`, two ready-to-use transports (STDIO and Streamable HTTP), a single demo tool, Moon task orchestration, pinned CI, dependency automation, repository security defaults, and an enabled release pipeline that has already been exercised by the template application.
 
 Delete this file after you finish the first-repository setup checklist below.
 It is only here to orient the initial project owner.
 
 ## What This Template Provides
 
-- A minimal Go module at `github.com/meigma/template-go`.
-- A Cobra/Viper CLI skeleton under `cmd/template-go` and `internal/cli`.
+- A minimal Go module at `github.com/meigma/template-mcp`.
+- A transport-agnostic MCP server in `internal/mcpserver` with one demo tool, `random_int`.
+- A Cobra/Viper CLI under `cmd/template-mcp` and `internal/cli`, with two transport subcommands: `stdio` and `http`.
 - Moon tasks for `format`, `lint`, `build`, `test`, and `check`.
 - `golangci-lint` wired through Proto and Moon.
 - CI that delegates to `moon ci --summary minimal` with pinned actions, dependency caches, and minimal token permissions.
@@ -21,6 +22,15 @@ It is only here to orient the initial project owner.
 - A root `ghd.toml` package manifest so released binaries can be installed with `ghd`.
 
 ## How It Works
+
+The package layout keeps the server independent of any transport:
+
+- `cmd/template-mcp` — thin entrypoint that wires signal handling into the CLI.
+- `internal/cli` — builds the Cobra command tree. `root.go` registers the subcommands; `stdio.go` and `http.go` each own one transport.
+- `internal/mcpserver` — constructs the MCP server and registers the `random_int` tool. It knows nothing about transports.
+- `internal/templateinfo` — the single source of truth for the application name and title, and the derived `TEMPLATE_MCP_*` environment-variable prefix. Renaming the app to your project starts here. (Build metadata — version, commit, date — is separate: GoReleaser injects it via ldflags into `cmd/template-mcp/main.go`.)
+
+Both subcommands call `mcpserver.New(...)` and differ only in how they connect it to a transport, so swapping or deleting a transport never touches the tool or server code.
 
 Moon is the main entrypoint for local development and CI:
 
@@ -40,7 +50,7 @@ The workflow caches Go modules, Go build artifacts, golangci-lint state, and uv'
 The `GitHub Pages` workflow builds the MkDocs site on pull requests and deploys the default-branch `docs/build` output to Pages. The repository settings manifest defaults Pages to workflow-based publishing with HTTPS enforcement.
 
 The release machinery is intentionally enabled in the template repository so the starter app proves Release Please, GoReleaser binary releases, native-runner container image builds, artifact validation, and attestations before generated projects inherit the setup.
-The nominal generated-project path is a CLI or service with both downloadable binaries and a container image. If the new project is binary-only, container-only, or a pure Go library, trim the release files as described below before the first release.
+The nominal generated-project path is a server with both a downloadable binary and a container image. If the new project is binary-only, container-only, trim the release files as described below before the first release.
 
 ## First Setup Checklist
 
@@ -50,45 +60,52 @@ The nominal generated-project path is a CLI or service with both downloadable bi
    go mod edit -module github.com/meigma/YOUR_REPO
    ```
 
-2. Choose the project shape.
-
-   Most applications should keep both the binary and container paths. For other shapes:
-
-   - Binary plus container: keep the default layout and update names.
-   - Binary only: keep GoReleaser and `ghd.toml`; remove the container release jobs and Dockerfile if the project will not ship images.
-   - Container only: keep the Dockerfile and container jobs; remove GoReleaser release assets and `ghd.toml` if users should not install a standalone binary.
-   - Library only: remove the CLI, Dockerfile, GoReleaser, `ghd.toml`, and publish workflow pieces. Keep Release Please only if the library should still get changelogs, tags, and draft GitHub releases.
-
-3. For a binary-producing project, rename the binary directory:
+2. Rename the binary directory:
 
    ```sh
-   mv cmd/template-go cmd/YOUR_BINARY
+   mv cmd/template-mcp cmd/YOUR_BINARY
    ```
 
-   For a library-only project, delete `cmd/template-go`, remove or rewrite `internal/cli`, and remove Cobra/Viper dependencies that are no longer used.
+3. Choose one transport.
 
-4. Replace template placeholders:
+   The template ships both the STDIO and Streamable HTTP transports so you can compare them. Most servers keep one:
+
+   - **STDIO** for a server the client launches as a local subprocess.
+   - **Streamable HTTP** for a remote or containerized server.
+
+   To keep only one transport, delete the unused subcommand file and remove its single registration line in `internal/cli/root.go`:
+
+   - Keeping STDIO: delete `internal/cli/http.go` and its registration in `root.go`.
+   - Keeping HTTP: delete `internal/cli/stdio.go` and its registration in `root.go`.
+
+   The `internal/mcpserver` server and the `random_int` tool do not change when you drop a transport.
+
+4. Replace the demo tool.
+
+   `random_int` in `internal/mcpserver` is a placeholder that exists to prove the end-to-end tool path. Replace it with your own tool (typed input/output structs plus a handler registered via the SDK), or add more tools alongside it; each tool lives in its own file (`randomint.go`) with a matching test file (`randomint_test.go`). The transport subcommands stay the same.
+
+5. Replace template placeholders:
 
    ```sh
-   rg "template-go|TEMPLATE_GO|github.com/meigma/template-go"
+   rg "template-mcp|TEMPLATE_MCP|github.com/meigma/template-mcp"
    ```
 
-   Update Go imports, Moon metadata, README text, docs text, and CLI environment variable prefixes. For release-bearing projects, also update `.goreleaser.yaml`, `release-please-config.json`, `ghd.toml`, `Dockerfile`, and `.github/workflows/release*.yml` as applicable.
+   Update Go imports, Moon metadata, README text, docs text, the MCP server `Implementation` name/title, and CLI environment variable prefixes. For release-bearing projects, also update `.goreleaser.yaml`, `release-please-config.json`, `ghd.toml`, `Dockerfile`, and `.github/workflows/release*.yml` as applicable.
    Update `docs/mkdocs.yml` with the generated repository's GitHub Pages URL, usually `https://OWNER.github.io/REPO/`.
 
-5. Refresh module metadata:
+6. Refresh module metadata:
 
    ```sh
    go mod tidy
    ```
 
-6. Configure releases for the chosen shape.
+7. Configure releases for the chosen shape.
 
    For the nominal binary plus container case:
 
    - Update `.goreleaser.yaml`: `project_name`, build `id`, `main`, binary name, archive name template, and any linked package paths.
    - Update `ghd.toml`: `provenance.signer_workflow`, package name, description, asset patterns, and installed binary path.
-   - Update `Dockerfile`: binary path, labels, default `SOURCE`, base-image tags/digests, and runtime command if this is a service instead of a CLI.
+   - Update `Dockerfile`: binary path, labels, default `SOURCE`, base-image tags/digests, and the default subcommand to match the transport you kept (containers usually run `http`).
    - Update `.github/workflows/release.yml`: `IMAGE_NAME`, binary validation names, container labels, summary commands, and verification examples.
    - Update `.github/workflows/release-dry-run.yml`: binary validation names, local container image name, and smoke-test commands.
    - Update `.github/workflows/security-scan.yml`: local container image name and scan category.
@@ -108,29 +125,22 @@ The nominal generated-project path is a CLI or service with both downloadable bi
    - Change `container-image-release` so it depends only on `resolve-release`.
    - Remove `Binary Release Dry Run` from required branch checks.
 
-   For library-only projects:
-
-   - Keep Release Please if version tags and changelogs are useful.
-   - Delete `.github/workflows/release.yml`, `.github/workflows/release-dry-run.yml`, `.github/workflows/security-scan.yml`, `.goreleaser.yaml`, `ghd.toml`, `Dockerfile`, and `.dockerignore` unless the library publishes some other artifact.
-   - Remove release dry-run checks from `.github/repository-settings.toml`.
-   - If the library should not create releases at all, delete `.github/workflows/release-please.yml`, `release-please-config.json`, `.release-please-manifest.json`, and `CHANGELOG.md`.
-
    In every release-bearing project, configure the release app credentials, protected-tag bypass, and repository package permissions before the first release. Run the release dry-run workflow after these edits and before merging the first release PR.
 
-7. Run the full local check:
+8. Run the full local check:
 
    ```sh
    moon run root:check
    ```
 
-8. Update project-facing docs:
+9. Update project-facing docs:
 
-   - Rewrite `README.md` for the actual project.
+   - Rewrite `README.md` for the actual server, including its real tools and the transport you kept.
    - Review `CONTRIBUTING.md` and `SECURITY.md`.
    - Add a real license before publishing the repository.
 
-9. Delete this file:
+10. Delete this file:
 
-   ```sh
-   rm DELETE_ME.md
-   ```
+    ```sh
+    rm DELETE_ME.md
+    ```

@@ -58,5 +58,9 @@ COPY --from=build /out/template-mcp /usr/local/bin/template-mcp
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/template-mcp"]
 # Containers are the networked deployment: default to the Streamable HTTP
-# transport bound to all interfaces. The SDK's Origin protection still applies.
-CMD ["http", "--addr", "0.0.0.0:8080"]
+# transport bound to all interfaces. Origin protection still applies, but a
+# non-loopback bind with no auth exposes every tool to any client that can reach
+# the port, so --insecure is required to opt into that explicitly. For a real
+# deployment, supply authentication (--auth-token, or a real OAuth 2.1 verifier)
+# and drop --insecure.
+CMD ["http", "--addr", "0.0.0.0:8080", "--insecure"]

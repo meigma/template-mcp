@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -52,7 +53,8 @@ func newHTTPCommand(options Options) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			addr := options.Viper.GetString("addr")
 			authToken := options.Viper.GetString("auth-token")
-			return runHTTP(cmd.Context(), options.Build, addr, authToken)
+			insecure := options.Viper.GetBool("insecure")
+			return runHTTP(cmd.Context(), options.Build, addr, authToken, insecure)
 		},
 	}
 
@@ -66,11 +68,23 @@ func newHTTPCommand(options Options) *cobra.Command {
 		"",
 		"DEMO-ONLY shared bearer token; empty disables auth (env TEMPLATE_MCP_AUTH_TOKEN)",
 	)
+	// --insecure is the explicit opt-in to bind a non-loopback address without
+	// authentication. Without it, runHTTP refuses such a configuration so a
+	// published port or container cannot silently expose every tool.
+	cmd.Flags().Bool(
+		"insecure",
+		false,
+		"allow binding a non-loopback address without authentication (UNSAFE; env TEMPLATE_MCP_INSECURE)",
+	)
 
 	return cmd
 }
 
-func runHTTP(ctx context.Context, build BuildInfo, addr, authToken string) error {
+func runHTTP(ctx context.Context, build BuildInfo, addr, authToken string, insecure bool) error {
+	if err := checkBindSecurity(addr, authToken, insecure); err != nil {
+		return err
+	}
+
 	handler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server {
 			return mcpserver.New(mcpserver.BuildInfo{Version: build.Version})
@@ -132,6 +146,50 @@ func runHTTP(ctx context.Context, build BuildInfo, addr, authToken string) error
 	}
 
 	return nil
+}
+
+// checkBindSecurity fails closed against a network-exposed, unauthenticated
+// server. A non-loopback bind with no authentication would expose every tool to
+// anyone who can reach the port — CrossOriginProtection only stops browser
+// cross-origin requests, not direct clients such as curl. Such a configuration
+// is allowed only when the operator explicitly opts in with --insecure.
+func checkBindSecurity(addr, authToken string, insecure bool) error {
+	if isLoopbackHost(addr) || authToken != "" || insecure {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"refusing to bind non-loopback address %q without authentication: "+
+			"set --auth-token (env TEMPLATE_MCP_AUTH_TOKEN) to require a bearer token, "+
+			"or pass --insecure to expose all tools unauthenticated (UNSAFE)",
+		addr,
+	)
+}
+
+// isLoopbackHost reports whether addr binds only the loopback interface.
+//
+// It treats "localhost" and any loopback IP literal as loopback. An empty host
+// (for example ":8080") binds all interfaces and is not loopback, and a
+// non-localhost hostname cannot be proven loopback without resolving it, so it
+// is treated as non-loopback. The conservative direction is deliberate: when in
+// doubt, the caller's fail-closed guard applies.
+func isLoopbackHost(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// No port present; treat the whole string as the host.
+		host = addr
+	}
+	switch host {
+	case "":
+		return false
+	case "localhost":
+		return true
+	default:
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.IsLoopback()
+		}
+		return false
+	}
 }
 
 // requireBearerToken builds DEMO-ONLY bearer-token middleware.

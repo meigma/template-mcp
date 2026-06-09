@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"math"
 	"testing"
 )
 
@@ -17,6 +18,11 @@ func TestRandomInt(t *testing.T) {
 		{name: "equal bounds", in: randomIntInput{Min: 5, Max: 5}},
 		{name: "negative range", in: randomIntInput{Min: -10, Max: -1}},
 		{name: "spans zero", in: randomIntInput{Min: -3, Max: 3}},
+		// Extreme ranges must not panic: a naive int64 span computation
+		// (max - min + 1) overflows here and would make crypto/rand.Int panic.
+		{name: "full int range", in: randomIntInput{Min: math.MinInt, Max: math.MaxInt}},
+		{name: "wide range from min", in: randomIntInput{Min: math.MinInt, Max: 0}},
+		{name: "wide range to max", in: randomIntInput{Min: 0, Max: math.MaxInt}},
 		{name: "min greater than max", in: randomIntInput{Min: 10, Max: 1}, wantErr: true},
 	}
 

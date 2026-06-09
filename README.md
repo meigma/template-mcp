@@ -72,6 +72,7 @@ The template bakes in the practices that an MCP server must have. Preserve them 
 
 - **stdout is reserved for JSON-RPC.** Over the STDIO transport, stdout carries protocol messages only. Writing anything else to stdout — a stray `fmt.Println`, a logger pointed at `os.Stdout` — silently corrupts the stream and is the most common way a stdio server breaks. The template logs to `os.Stderr` only; keep all logging and diagnostics on stderr.
 - **Origin verification and a loopback default for HTTP.** The `http` transport wraps the SDK handler in the standard library's cross-origin protection to defend against DNS-rebinding and CSRF from browsers, and `--addr` defaults to `localhost:8080`. Binding to a non-loopback address exposes the server to the network and is an explicit, security-relevant decision.
+- **The HTTP transport fails closed off loopback.** Cross-origin protection stops malicious browsers, not direct clients such as `curl`. So binding a non-loopback address (for example `0.0.0.0`) with no authentication is refused at startup unless you either set `--auth-token` or pass `--insecure` to opt into an unauthenticated, network-exposed server. The container image defaults to `--insecure` so the demo runs out of the box; remove it and supply real authentication before deploying.
 - **The bearer-auth seam is demo-only.** The HTTP transport includes a minimal, flag-gated bearer-token check that is off by default and exists to show where authorization belongs. It is not production authorization. A production server needs a real OAuth 2.1 resource server: protected-resource metadata (RFC 9728), audience-restricted tokens (RFC 8707), and PKCE with S256. Validate token signature, expiry, and audience against a trusted authorization server.
 - **Authorization is HTTP-only.** Per the MCP specification, authorization applies to HTTP transports only. STDIO servers must not use OAuth; they take any credentials they need from the environment of the process that launched them.
 
@@ -114,7 +115,7 @@ docker run --rm template-mcp:dev --version
 
 The Dockerfile pins the builder and runtime images by digest and verifies that the selected Go builder image matches `.go-version`. When bumping Go, update `.go-version` and the builder `FROM` tag/digest together.
 
-Containers are the networked deployment, so a container most likely runs the `http` subcommand. When exposing the HTTP transport beyond loopback, set `--addr` accordingly and make sure the security expectations above (origin verification, real authorization) are met.
+Containers are the networked deployment, so a container most likely runs the `http` subcommand. The image defaults to `http --addr 0.0.0.0:8080 --insecure`, which runs the demo unauthenticated; `--insecure` is required because the server otherwise refuses to bind a non-loopback address without authentication. Before deploying, drop `--insecure` and supply real authorization (see the security expectations above).
 
 Release builds can pass the same binary metadata injected by GoReleaser:
 

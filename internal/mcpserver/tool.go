@@ -55,13 +55,23 @@ func randomInt(
 		return nil, randomIntOutput{}, fmt.Errorf("min (%d) must be <= max (%d)", in.Min, in.Max)
 	}
 
-	// big.NewInt takes the size of the half-open interval [0, span); adding
-	// in.Min shifts it to the requested inclusive range.
-	span := int64(in.Max) - int64(in.Min) + 1
-	n, err := rand.Int(rand.Reader, big.NewInt(span))
+	// span is the size of the half-open interval [0, span) to draw from, i.e.
+	// max - min + 1. It is computed with big.Int throughout: int64 arithmetic
+	// would overflow for client-controlled extreme ranges (for example
+	// min=math.MinInt, max=math.MaxInt), wrapping to a non-positive value that
+	// makes crypto/rand.Int panic.
+	span := new(big.Int).Sub(big.NewInt(int64(in.Max)), big.NewInt(int64(in.Min)))
+	span.Add(span, big.NewInt(1))
+
+	n, err := rand.Int(rand.Reader, span)
 	if err != nil {
 		return nil, randomIntOutput{}, fmt.Errorf("generate random int: %w", err)
 	}
 
-	return nil, randomIntOutput{Value: int(n.Int64()) + in.Min}, nil
+	// Shift the [0, span) draw into the inclusive range [min, max]. The result is
+	// guaranteed to lie within [min, max], so it fits back into an int and Int64
+	// cannot overflow.
+	value := new(big.Int).Add(n, big.NewInt(int64(in.Min)))
+
+	return nil, randomIntOutput{Value: int(value.Int64())}, nil
 }

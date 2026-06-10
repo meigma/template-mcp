@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -150,14 +151,22 @@ type integrationHarness struct {
 	listChanged chan struct{}
 	logs        chan *mcp.LoggingMessageParams
 	runErr      chan error
-	cancel      context.CancelFunc
+
+	// ctx and cancel bound proxy.run and every connection the harness makes;
+	// shutdown's cancel is the clean-exit trigger under test.
+	ctx    context.Context //nolint:containedctx // A test harness's lifetime is the context's lifetime.
+	cancel context.CancelFunc
+	proxy  *proxy
+
+	// down records that shutdown already ran: the E2E test asserts shutdown
+	// explicitly as its final phase, and the registered cleanup must not wait
+	// on the once-only runErr channel a second time.
+	down bool
 }
 
-// newIntegrationHarness wires the proxy through newProxy (the production
-// construction order), starts proxy.run, and connects the fake Claude client.
-// The connect ordering is safe: proxy.run connects the server side first, and
-// the in-memory transport blocks the client's initialize write until the
-// server side reads.
+// newIntegrationHarness wires the proxy with the integration fakes injected
+// at every process edge: channel-fed watcher and builder, in-memory children
+// behind the upstream transport seam.
 func newIntegrationHarness(t *testing.T) *integrationHarness {
 	t.Helper()
 
@@ -170,26 +179,39 @@ func newIntegrationHarness(t *testing.T) *integrationHarness {
 		runErr:      make(chan error, 1),
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	h.cancel = cancel
+	h.ctx, h.cancel = context.WithCancel(t.Context())
+
+	h.start(t, config{debounce: testDebounce}, seams{
+		watcher:        &channelWatcher{events: h.events},
+		builder:        &channelBuilder{artifacts: h.artifacts},
+		childTransport: h.childTransport(h.ctx),
+	}, io.Discard, discardLogger())
+	return h
+}
+
+// start wires the proxy through newProxy (the production construction order)
+// with the downstream in-memory transport injected into s, starts proxy.run,
+// and connects the fake Claude client. The connect ordering is safe: proxy.run
+// connects the server side first, and the in-memory transport blocks the
+// client's initialize write until the server side reads. The E2E suite reuses
+// it with the production seams (only the downstream transport injected) and a
+// real config.
+func (h *integrationHarness) start(
+	t *testing.T,
+	cfg config,
+	s seams,
+	errOut io.Writer,
+	logger *slog.Logger,
+) {
+	t.Helper()
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	proxy, err := newProxy(
-		config{debounce: testDebounce},
-		strings.NewReader(""),
-		io.Discard,
-		io.Discard,
-		discardLogger(),
-		seams{
-			watcher:             &channelWatcher{events: h.events},
-			builder:             &channelBuilder{artifacts: h.artifacts},
-			childTransport:      h.childTransport(ctx),
-			downstreamTransport: serverTransport,
-		},
-	)
+	s.downstreamTransport = serverTransport
+	p, err := newProxy(cfg, strings.NewReader(""), io.Discard, errOut, logger, s)
 	require.NoError(t, err, "wire the proxy through newProxy")
+	h.proxy = p
 
-	go func() { h.runErr <- proxy.run(ctx) }()
+	go func() { h.runErr <- p.run(h.ctx) }()
 
 	client := mcp.NewClient(
 		&mcp.Implementation{Name: "fake-claude", Version: "0.0.1"},
@@ -208,12 +230,11 @@ func newIntegrationHarness(t *testing.T) *integrationHarness {
 			},
 		},
 	)
-	session, err := client.Connect(ctx, clientTransport, nil)
+	session, err := client.Connect(h.ctx, clientTransport, nil)
 	require.NoError(t, err, "connect the fake Claude client to the proxy's downstream server")
 	h.client = session
 
 	t.Cleanup(func() { h.shutdown(t) })
-	return h
 }
 
 // childTransport is the upstream.TransportFactory: it connects the registered
@@ -283,9 +304,18 @@ func (h *integrationHarness) feedArtifact(t *testing.T, artifact string) {
 func (h *integrationHarness) awaitListChanged(t *testing.T) {
 	t.Helper()
 
+	h.awaitListChangedWithin(t, waitTimeout)
+}
+
+// awaitListChangedWithin is awaitListChanged with an explicit budget: the E2E
+// cold start passes a longer one because its first real go build may compile
+// the SDK from a cold build cache.
+func (h *integrationHarness) awaitListChangedWithin(t *testing.T, timeout time.Duration) {
+	t.Helper()
+
 	select {
 	case <-h.listChanged:
-	case <-time.After(waitTimeout):
+	case <-time.After(timeout):
 		t.Fatal("expected the client's ToolListChangedHandler to fire")
 	}
 }
@@ -332,8 +362,16 @@ func (h *integrationHarness) callTool(t *testing.T, name string) *mcp.CallToolRe
 // shutdown is the clean-exit assertion every test ends with: cancelling the
 // run context must bring the downstream session and the core (including every
 // child it owns) down, and proxy.run must classify that as a clean nil exit.
+// It is idempotent — the E2E test asserts it explicitly as its final phase
+// while it stays registered as a cleanup — and it releases the proxy's
+// resources afterward, exactly as production's deferred close does.
 func (h *integrationHarness) shutdown(t *testing.T) {
 	t.Helper()
+
+	if h.down {
+		return
+	}
+	h.down = true
 
 	h.cancel()
 	select {
@@ -343,6 +381,7 @@ func (h *integrationHarness) shutdown(t *testing.T) {
 		t.Fatal("expected proxy.run to return after cancellation")
 	}
 	_ = h.client.Close()
+	require.NoError(t, h.proxy.close(), "release the proxy's resources after run returned")
 }
 
 // objectSchema returns a fresh minimal valid input schema.

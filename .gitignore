@@ -43,6 +43,8 @@ htmlcov/
 .coverage.*
 dist/
 build/
+# The Python build/ rule above must not swallow Go packages named build.
+!tools/proxy/internal/build/
 site/
 *.egg-info/
 .eggs/

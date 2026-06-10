@@ -185,11 +185,16 @@ func (f *Frontend) Reconcile(tools []*mcp.Tool, call reloader.CallToolFunc) erro
 	return nil
 }
 
-// Run serves the downstream session over stdio until ctx is cancelled or the
-// client closes the connection. stdout is the protocol channel: nothing in
-// the proxy may write to it except the SDK transport.
-func (f *Frontend) Run(ctx context.Context) error {
-	if err := f.server.Run(ctx, &mcp.StdioTransport{}); err != nil {
+// Run serves the downstream session over transport until ctx is cancelled or
+// the client closes the connection. The transport is injected for the same
+// reason the template server drives its stdio command over provided streams:
+// the seam is real, so tests connect in-memory transports and a networked
+// downstream later slots in without touching this adapter's callers. In
+// production the cli passes an IOTransport over the process streams — stdout
+// is the protocol channel, and nothing in the proxy may write to it except
+// the SDK transport.
+func (f *Frontend) Run(ctx context.Context, transport mcp.Transport) error {
+	if err := f.server.Run(ctx, transport); err != nil {
 		return fmt.Errorf("serve downstream session: %w", err)
 	}
 	return nil

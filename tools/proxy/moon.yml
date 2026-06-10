@@ -52,16 +52,13 @@ tasks:
     options:
       cache: false
 
-  # No cmd/ entrypoint until the CLI milestone lands; compile every package
-  # instead. Switch to 'go build -o bin/mcp-devproxy ./cmd/mcp-devproxy' (with
-  # a bin output and caching) once cmd/ exists.
   build:
-    command: 'go build ./...'
+    command: 'go build -o bin/mcp-devproxy ./cmd/mcp-devproxy'
     toolchains: ['go']
     inputs:
       - '@group(goSources)'
-    options:
-      cache: false
+    outputs:
+      - 'bin/mcp-devproxy'
 
   test:
     command: 'go test ./...'

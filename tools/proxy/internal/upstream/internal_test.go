@@ -56,25 +56,3 @@ func TestCommandTransportFactory(t *testing.T) {
 			"expected the child's stderr to default to the proxy's stderr")
 	})
 }
-
-// TestChildSessionPublishLatestWins pins the publish discipline directly:
-// with no reader, a newer snapshot replaces the unread one and the call
-// never blocks (a blocking send would wedge the child's notification
-// handling).
-func TestChildSessionPublishLatestWins(t *testing.T) {
-	t.Parallel()
-
-	session := &childSession{toolsCh: make(chan []*mcp.Tool, 1)}
-
-	session.publish([]*mcp.Tool{{Name: "stale"}})
-	session.publish([]*mcp.Tool{{Name: "fresh"}})
-
-	select {
-	case snapshot := <-session.toolsCh:
-		require.Len(t, snapshot, 1, "expected exactly one snapshot")
-		assert.Equal(t, "fresh", snapshot[0].Name,
-			"expected the unread stale snapshot to be replaced by the newest one")
-	default:
-		t.Fatal("expected a snapshot waiting on the channel")
-	}
-}

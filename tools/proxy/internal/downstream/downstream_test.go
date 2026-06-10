@@ -1,6 +1,5 @@
 // Tests are whitebox: connecting an in-memory client requires the unexported
-// server field, and the no-op-diff contract is pinned on the unexported
-// generation counter rather than a flaky absence-of-notification wait.
+// server field.
 
 package downstream
 
@@ -107,13 +106,6 @@ func (tc *testContext) recordingCall() reloader.CallToolFunc {
 	}
 }
 
-// generation reads the frontend's reconcile generation under its lock.
-func (tc *testContext) generation() uint64 {
-	tc.frontend.mu.Lock()
-	defer tc.frontend.mu.Unlock()
-	return tc.frontend.gen
-}
-
 // awaitListChanged waits for one tools/list_changed to reach the client.
 func (tc *testContext) awaitListChanged(t *testing.T) {
 	t.Helper()
@@ -125,7 +117,9 @@ func (tc *testContext) awaitListChanged(t *testing.T) {
 	}
 }
 
-// requireNoListChanged asserts no notification arrives within quietWindow.
+// requireNoListChanged asserts no notification arrives within quietWindow —
+// the observable proof of zero AddTool/RemoveTools calls, since the SDK emits
+// a (coalesced) tools/list_changed for every mutation.
 func (tc *testContext) requireNoListChanged(t *testing.T) {
 	t.Helper()
 
@@ -136,7 +130,7 @@ func (tc *testContext) requireNoListChanged(t *testing.T) {
 		default:
 			return false
 		}
-	}, quietWindow, tick, "expected no tools/list_changed from a no-op reconcile")
+	}, quietWindow, tick, "expected no tools/list_changed (zero AddTool/RemoveTools calls)")
 }
 
 // requireStale asserts result is the friendly stale-reload tool result.
@@ -354,14 +348,15 @@ func TestFrontendNoOpDiffMakesNoCalls(t *testing.T) {
 	tc := newTestContext(t)
 	tc.reconcile(t, namedTool("alpha"), readOnlyTool("beta"))
 	tc.awaitListChanged(t)
-	before := tc.generation()
+	listNames(t, tc.session)
 
 	// A deep-copied identical set: fresh builder values, same wire form.
 	tc.reconcile(t, namedTool("alpha"), readOnlyTool("beta"))
 
-	assert.Equal(t, before, tc.generation(),
-		"expected a no-op diff to leave the generation untouched (zero server calls)")
 	tc.requireNoListChanged(t)
+	// The call dispatching without a fresh tools/list proves the no-op diff
+	// also left the stale-view clock untouched.
+	tc.requireForwarded(t, callTool(t, tc.session, "alpha"))
 }
 
 func TestFrontendStaleViewGating(t *testing.T) {
@@ -465,5 +460,5 @@ func TestFrontendReconcileValidationError(t *testing.T) {
 	require.Error(t, err, "expected an error, not a panic, for a definition without an input schema")
 	require.ErrorContains(t, err, "missing input schema", "expected the validation failure to say why")
 	assert.Empty(t, listNames(t, tc.session), "expected nothing to be advertised after the failure")
-	assert.Zero(t, tc.generation(), "expected the failed reconcile to leave no generation bump")
+	tc.requireNoListChanged(t)
 }

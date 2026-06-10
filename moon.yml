@@ -75,6 +75,7 @@ tasks:
       - 'root:build'
       - 'root:test'
       - 'docs:build'
+      - 'proxy:check'
     inputs:
       - '@group(goSources)'
       - '@group(lintConfig)'

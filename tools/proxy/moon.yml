@@ -1,0 +1,84 @@
+language: 'go'
+layer: 'tool'
+stack: 'backend'
+
+project:
+  title: 'mcp-devproxy'
+  description: 'MCP dev proxy that hot-reloads an in-development server behind a stable client session.'
+  owner: 'meigma'
+  maintainers:
+    - 'meigma'
+
+toolchains:
+  default: 'go'
+
+fileGroups:
+  goSources:
+    - 'cmd/**/*.go'
+    - 'internal/**/*.go'
+    - 'go.mod'
+    - 'go.sum'
+  lintConfig:
+    - '/.golangci.yml'
+    - '/.prototools'
+    - '/.moon/proto/golangci-lint.toml'
+    - '.mockery.yaml'
+
+workspace:
+  inheritedTasks:
+    include: []
+
+# format/lint reuse the root .golangci.yml. No local-prefix override is needed:
+# goimports matches local-prefixes by string prefix, so the root's
+# 'github.com/meigma/template-mcp' already covers this nested module's path
+# ('github.com/meigma/template-mcp/tools/proxy').
+tasks:
+  format:
+    command: 'proto run golangci-lint -- fmt --config ../../.golangci.yml --diff'
+    toolchains: ['go']
+    inputs:
+      - '@group(goSources)'
+      - '@group(lintConfig)'
+    options:
+      cache: false
+
+  lint:
+    command: 'proto run golangci-lint -- run --config ../../.golangci.yml ./... --show-stats=false'
+    toolchains: ['go']
+    inputs:
+      - '@group(goSources)'
+      - '@group(lintConfig)'
+    options:
+      cache: false
+
+  # No cmd/ entrypoint until the CLI milestone lands; compile every package
+  # instead. Switch to 'go build -o bin/mcp-devproxy ./cmd/mcp-devproxy' (with
+  # a bin output and caching) once cmd/ exists.
+  build:
+    command: 'go build ./...'
+    toolchains: ['go']
+    inputs:
+      - '@group(goSources)'
+    options:
+      cache: false
+
+  test:
+    command: 'go test ./...'
+    toolchains: ['go']
+    inputs:
+      - '@group(goSources)'
+    options:
+      cache: false
+
+  check:
+    deps:
+      - 'proxy:format'
+      - 'proxy:lint'
+      - 'proxy:build'
+      - 'proxy:test'
+    inputs:
+      - '@group(goSources)'
+      - '@group(lintConfig)'
+    options:
+      cache: false
+      runInCI: true

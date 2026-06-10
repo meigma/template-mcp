@@ -3,9 +3,16 @@ package reloader
 import (
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+// Caller-provided buffer knob values for TestNew, distinct from the defaults.
+const (
+	customBufferLimit   = 7
+	customBufferTimeout = 3 * time.Second
 )
 
 func TestNew(t *testing.T) {
@@ -48,12 +55,67 @@ func TestNew(t *testing.T) {
 			wantErr: "upstream is required",
 		},
 		{
+			name: "errors when BufferLimit is negative",
+			options: func(t *testing.T) Options {
+				t.Helper()
+				opts := validOptions(t)
+				opts.BufferLimit = -1
+				return opts
+			},
+			wantErr: "buffer limit must not be negative",
+		},
+		{
+			name: "errors when BufferTimeout is negative",
+			options: func(t *testing.T) Options {
+				t.Helper()
+				opts := validOptions(t)
+				opts.BufferTimeout = -time.Second
+				return opts
+			},
+			wantErr: "buffer timeout must not be negative",
+		},
+		{
 			name:    "defaults nil Logger to a no-op logger and nil Clock to real time",
 			options: validOptions,
 			assertReloader: func(t *testing.T, _ Options, got *Reloader) {
 				t.Helper()
 				assert.NotNil(t, got.logger, "expected a no-op logger default for nil Options.Logger")
 				assert.IsType(t, systemClock{}, got.clock, "expected the real-time clock default for nil Options.Clock")
+			},
+		},
+		{
+			name:    "defaults zero buffer knobs",
+			options: validOptions,
+			assertReloader: func(t *testing.T, _ Options, got *Reloader) {
+				t.Helper()
+				require.NotNil(t, got.router, "expected the call router wired at construction")
+				assert.Equal(t, defaultBufferLimit, got.router.bufferLimit, "expected the default buffer limit")
+				assert.Equal(t, defaultBufferTimeout, got.router.bufferTimeout, "expected the default buffer timeout")
+			},
+		},
+		{
+			name: "keeps caller-provided buffer knobs",
+			options: func(t *testing.T) Options {
+				t.Helper()
+				opts := validOptions(t)
+				opts.BufferLimit = customBufferLimit
+				opts.BufferTimeout = customBufferTimeout
+				return opts
+			},
+			assertReloader: func(t *testing.T, _ Options, got *Reloader) {
+				t.Helper()
+				assert.Equal(
+					t,
+					customBufferLimit,
+					got.router.bufferLimit,
+					"expected the caller-provided buffer limit kept",
+				)
+				assert.Equal(
+					t,
+					customBufferTimeout,
+					got.router.bufferTimeout,
+					"expected the caller-provided buffer timeout kept",
+				)
 			},
 		},
 		{

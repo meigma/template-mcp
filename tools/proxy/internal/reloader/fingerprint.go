@@ -12,6 +12,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// fingerprintErrorMarker prefixes the placeholder fingerprintTools records
+// for an unfingerprintable definition. It can never equal a real hex
+// fingerprint, and the router's drain gate treats any marker-prefixed
+// fingerprint as never matching.
+const fingerprintErrorMarker = "!error: "
+
 // Fingerprint returns a deterministic fingerprint of a tool's full wire
 // definition: name, title, description, input and output schemas,
 // annotations, icons, and _meta. No fields are ignored — even an
@@ -81,7 +87,7 @@ func fingerprintTools(logger *slog.Logger, tools []*mcp.Tool) map[string]string 
 		fingerprint, err := Fingerprint(tool)
 		if err != nil {
 			logger.Error("fingerprinting tool definition failed", "tool", tool.Name, "error", err)
-			fingerprint = "!error: " + err.Error()
+			fingerprint = fingerprintErrorMarker + err.Error()
 		}
 		fingerprints[tool.Name] = fingerprint
 	}

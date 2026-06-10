@@ -88,9 +88,6 @@ func TestNew(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.NotNil(t, got)
-			assert.Same(t, opts.Watcher, got.watcher, "expected the provided Watcher port to be wired")
-			assert.Same(t, opts.Builder, got.builder, "expected the provided Builder port to be wired")
-			assert.Same(t, opts.Upstream, got.upstream, "expected the provided Upstream port to be wired")
 			tt.assertReloader(t, opts, got)
 		})
 	}

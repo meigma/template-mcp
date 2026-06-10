@@ -1,8 +1,11 @@
 package upstream_test
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -408,6 +411,39 @@ func TestUpstreamWarnsOnUnforwardedCapabilities(t *testing.T) {
 
 	assert.True(t, tc.logs.contains("forwards tools only"),
 		"expected a prominent warning that v1 does not forward the child's prompts/resources")
+}
+
+// TestUpstreamDefaultTransportRunsArtifact proves the default command
+// transport through Start alone: the configured argv runs with {{artifact}}
+// substituted in every element, and the child's stderr reaches the
+// configured writer (the SDK's CommandTransport does not wire it). The
+// artifact is a scratch script that prints its command line and exits, so
+// the MCP handshake fails — the expected error; the executed command line
+// on stderr is the observable behavior. Shutdown escalation timing
+// (TerminateDuration) needs a hung child and real signals; the M4 E2E
+// tests own it.
+func TestUpstreamDefaultTransportRunsArtifact(t *testing.T) {
+	t.Parallel()
+
+	artifact := filepath.Join(t.TempDir(), "child-artifact")
+	require.NoError(t,
+		os.WriteFile(artifact, []byte("#!/bin/sh\necho \"argv: $0 $*\" >&2\n"), 0o700),
+		"write the child fixture script")
+
+	var stderr bytes.Buffer
+	up, err := upstream.New(upstream.Options{
+		Argv:   []string{"{{artifact}}", "stdio", "--bin={{artifact}}"},
+		Stderr: &stderr,
+	})
+	require.NoError(t, err, "construct upstream")
+
+	_, err = up.Start(t.Context(), artifact)
+
+	require.Error(t, err, "expected the handshake against a non-MCP child to fail")
+	// Start reaps the child before returning (the transport's Close runs
+	// cmd.Wait), so the buffer is complete and race-free to read here.
+	assert.Contains(t, stderr.String(), "argv: "+artifact+" stdio --bin="+artifact,
+		"expected {{artifact}} substituted in every argv element and the child's stderr wired to the configured writer")
 }
 
 func TestNewValidation(t *testing.T) {

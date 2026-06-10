@@ -107,6 +107,11 @@ type Upstream struct {
 }
 
 // New constructs an Upstream from options.
+//
+// New fails when neither Argv nor Transport is set — without one of them
+// there is no way to reach a child. Unset options select dev-loop defaults:
+// a 1s TerminateDuration, a 5s HealthTimeout, the proxy's own [os.Stderr]
+// for child stderr, the CommandTransport factory, and a no-op logger.
 func New(options Options) (*Upstream, error) {
 	if options.Transport == nil && len(options.Argv) == 0 {
 		return nil, errors.New("a child argv template is required when no transport factory is set")

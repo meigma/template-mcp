@@ -47,6 +47,10 @@ type Watcher struct {
 }
 
 // New constructs a Watcher from options.
+//
+// New fails when Dirs is empty; the paths themselves are not inspected here.
+// The fsnotify watcher is created per Watch call, so a missing or unreadable
+// directory fails Watch, not New.
 func New(options Options) (*Watcher, error) {
 	if len(options.Dirs) == 0 {
 		return nil, errors.New("at least one watch directory is required")

@@ -174,7 +174,7 @@ func TestFingerprintTools(t *testing.T) {
 	good := fingerprintToolFixture()
 	bad := unmarshalableToolFixture()
 
-	got := fingerprintTools(logger, []*mcp.Tool{good, bad, nil})
+	got := fingerprintTools(t.Context(), logger, []*mcp.Tool{good, bad, nil})
 
 	wantGood, err := Fingerprint(good)
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestFingerprintTools(t *testing.T) {
 	assert.True(t, strings.HasPrefix(got[bad.Name], "!"),
 		"expected an unfingerprintable tool to be recorded under a marker that can never equal a hex fingerprint")
 
-	again := fingerprintTools(logger, []*mcp.Tool{good, bad, nil})
+	again := fingerprintTools(t.Context(), logger, []*mcp.Tool{good, bad, nil})
 	assert.Equal(t, got, again, "expected fingerprintTools to be deterministic")
 }
 

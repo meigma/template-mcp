@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -84,13 +83,15 @@ func (r *Reloader) runCycle(ctx context.Context, artifact string, results chan<-
 //
 // The drained channel is checked non-blocking first: in the common idle case
 // Quiesce returns a pre-closed channel and no grace timer is ever created.
-// Reconcile is skipped entirely when the new fingerprint set equals the old —
-// an identical tool set produces zero Frontend calls — unless frontendStale
-// reports that the last Reconcile failed, in which case the advertised set
-// cannot be trusted to match and the skip is suppressed. A Reconcile error is
-// logged loudly and the new child serves anyway: its definitions were already
-// validated by the health gate, and dev-loop availability beats killing a
-// healthy child. The router's fingerprints are installed by Drain, not Swap,
+// Reconcile is skipped entirely when fingerprintsEqual reports the new
+// fingerprint set unchanged — an identical tool set produces zero Frontend
+// calls; error-marker fingerprints never count as unchanged — unless
+// frontendStale reports that the last Reconcile failed, in which case the
+// advertised set cannot be trusted to match and the skip is suppressed. A
+// Reconcile error is logged loudly and the new child serves anyway: its
+// definitions were already validated by the health gate, and dev-loop
+// availability beats killing a healthy child. The router's fingerprints are
+// installed by Drain, not Swap,
 // so calls buffered mid-swap record the definitions the client could still
 // see at ingress. On ctx cancellation during the quiesce wait the candidate
 // is closed and errSwapAborted returned.
@@ -118,12 +119,12 @@ func (r *Reloader) performSwap(
 	}
 
 	tools := candidate.Tools()
-	fps := fingerprintTools(r.logger, tools)
+	fps := fingerprintTools(ctx, r.logger, tools)
 	if old := r.router.Swap(candidate); old != nil {
 		r.closeChild(ctx, old, "previous")
 	}
 	reconciled := true
-	if !frontendStale && maps.Equal(fps, currentFPs) {
+	if !frontendStale && fingerprintsEqual(fps, currentFPs) {
 		r.logger.DebugContext(ctx, "tool set unchanged: skipping reconcile")
 	} else if err := r.frontend.Reconcile(tools, r.CallTool); err != nil {
 		reconciled = false
@@ -131,7 +132,7 @@ func (r *Reloader) performSwap(
 			"reconcile after swap failed; serving the new child anyway and retrying on the next reconcile",
 			"error", err)
 	}
-	r.router.Drain(fps)
+	r.router.Drain(ctx, fps)
 	return fps, reconciled, nil
 }
 
@@ -349,22 +350,24 @@ func (l *runLoop) onCycleFailure(ctx context.Context, cycleErr error) {
 	l.r.logger.WarnContext(ctx, "no healthy child: retry scheduled", "backoff", l.backoff)
 }
 
-// onChildDied handles the serving child's Done firing. Mid-cycle it is noted
-// and otherwise ignored — the cycle already replaces the child. In SERVING it
-// quiesces the router so restart-window calls buffer instead of erroring on a
-// dead transport, then restarts the last artifact build-free: immediately when
-// the backoff is clear (the child came from a fresh build), otherwise after
-// the current backoff delay. Every build-free restart advances the backoff
+// onChildDied handles the serving child's Done firing. The router is quiesced
+// immediately in every case, so crash-window calls buffer instead of
+// dispatching to the dead child's transport. Mid-cycle the crash is then
+// noted and otherwise ignored — the in-flight cycle already replaces the
+// child, and its swap's Drain releases the buffered calls. In SERVING it
+// restarts the last artifact build-free: immediately when the backoff is
+// clear (the child came from a fresh build), otherwise after the current
+// backoff delay. Every build-free restart advances the backoff
 // (onCycleResult) whether or not it health-gates, so consecutive crashes are
 // paced exponentially until a fresh build resets the delay.
 func (l *runLoop) onChildDied(ctx context.Context) {
 	l.currentDone = nil
 	l.currentDead = true
+	l.r.router.Quiesce()
 	if l.cycleCancel != nil {
 		l.r.logger.WarnContext(ctx, "child died during an in-flight reload cycle; the cycle replaces it")
 		return
 	}
-	l.r.router.Quiesce()
 	if l.backoff > 0 {
 		l.retryArtifact = l.lastArtifact
 		l.retryCh = l.r.clock.After(l.backoff)
@@ -378,19 +381,20 @@ func (l *runLoop) onChildDied(ctx context.Context) {
 }
 
 // onToolsChanged reconciles a child runtime tool change without a restart. An
-// identical snapshot is skipped outright — unless the last Reconcile failed,
-// in which case the advertised set may not match and the skip is suppressed.
-// Otherwise the router's fingerprints are updated first, so ingress recording
-// reflects what the child now serves, then the frontend reconciles. A
-// Reconcile error is logged loudly, the child keeps serving, and the failure
-// is recorded so the next opportunity retries.
+// identical snapshot is skipped outright (error-marker fingerprints never
+// count as identical) — unless the last Reconcile failed, in which case the
+// advertised set may not match and the skip is suppressed. Otherwise the
+// router's fingerprints are updated first, so ingress recording reflects what
+// the child now serves, then the frontend reconciles. A Reconcile error is
+// logged loudly, the child keeps serving, and the failure is recorded so the
+// next opportunity retries.
 func (l *runLoop) onToolsChanged(ctx context.Context, tools []*mcp.Tool, ok bool) {
 	if !ok {
 		l.currentTools = nil
 		return
 	}
-	fps := fingerprintTools(l.r.logger, tools)
-	if !l.frontendStale && maps.Equal(fps, l.currentFPs) {
+	fps := fingerprintTools(ctx, l.r.logger, tools)
+	if !l.frontendStale && fingerprintsEqual(fps, l.currentFPs) {
 		l.r.logger.DebugContext(ctx, "child runtime tool change is identical: skipping reconcile")
 		return
 	}
@@ -401,9 +405,10 @@ func (l *runLoop) onToolsChanged(ctx context.Context, tools []*mcp.Tool, ok bool
 		l.r.logger.ErrorContext(ctx,
 			"reconcile after child runtime tool change failed; still serving and retrying on the next reconcile",
 			"error", err)
+	} else {
+		l.r.logger.InfoContext(ctx, "reconciled child runtime tool change", "tools", len(tools))
 	}
 	l.currentFPs = fps
-	l.r.logger.InfoContext(ctx, "reconciled child runtime tool change", "tools", len(tools))
 }
 
 // startCycle launches the cycle goroutine. An empty artifact means a full

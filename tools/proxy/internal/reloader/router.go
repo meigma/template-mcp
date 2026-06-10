@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -188,7 +187,7 @@ func (r *router) SetFingerprints(fingerprints map[string]string) {
 // tool — or one whose ingress definition was unknown or unfingerprintable —
 // gets the stale-reload result instead: a non-idempotent call issued against
 // old semantics must never silently execute on new code.
-func (r *router) Drain(fingerprints map[string]string) {
+func (r *router) Drain(ctx context.Context, fingerprints map[string]string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -197,7 +196,7 @@ func (r *router) Drain(fingerprints map[string]string) {
 	for _, call := range r.buffer {
 		call.released = true
 		if !r.matchesCurrentLocked(call) {
-			r.logger.Debug("answering buffered call with stale-reload: definition changed",
+			r.logger.DebugContext(ctx, "answering buffered call with stale-reload: definition changed",
 				"tool", call.name)
 			call.release <- releaseDecision{stale: true}
 			continue
@@ -328,7 +327,7 @@ func (r *router) dispatch(
 // ingress fingerprint never matches, and neither does an error marker from
 // fingerprintTools — both gate stale rather than silently matching.
 func (r *router) matchesCurrentLocked(call *bufferedCall) bool {
-	if call.ingestFP == "" || strings.HasPrefix(call.ingestFP, fingerprintErrorMarker) {
+	if call.ingestFP == "" || isErrorFingerprint(call.ingestFP) {
 		return false
 	}
 	return r.fingerprints[call.name] == call.ingestFP

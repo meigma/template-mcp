@@ -1,32 +1,23 @@
 package reloader
 
 import (
-	"log/slog"
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-)
-
-// Caller-provided knob values for TestNew, distinct from the defaults.
-const (
-	customBufferLimit    = 7
-	customBufferTimeout  = 3 * time.Second
-	customDebounce       = 100 * time.Millisecond
-	customQuiesceGrace   = 2 * time.Second
-	customBackoffFloor   = 50 * time.Millisecond
-	customBackoffCeiling = time.Second
 )
 
 func TestNew(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		options        func(t *testing.T) Options
-		wantErr        string
-		assertReloader func(t *testing.T, opts Options, got *Reloader)
+		name    string
+		options func(t *testing.T) Options
+		wantErr string
 	}{
 		{
 			name: "errors when Watcher is missing",
@@ -119,79 +110,8 @@ func TestNew(t *testing.T) {
 			wantErr: "backoff ceiling must not be negative",
 		},
 		{
-			name:    "defaults nil Logger to a no-op logger and nil Clock to real time",
+			name:    "constructs from the required ports alone",
 			options: validOptions,
-			assertReloader: func(t *testing.T, _ Options, got *Reloader) {
-				t.Helper()
-				assert.NotNil(t, got.logger, "expected a no-op logger default for nil Options.Logger")
-				assert.IsType(t, systemClock{}, got.clock, "expected the real-time clock default for nil Options.Clock")
-			},
-		},
-		{
-			name:    "defaults zero timing and sizing knobs",
-			options: validOptions,
-			assertReloader: func(t *testing.T, _ Options, got *Reloader) {
-				t.Helper()
-				require.NotNil(t, got.router, "expected the call router wired at construction")
-				assert.Equal(t, defaultBufferLimit, got.router.bufferLimit, "expected the default buffer limit")
-				assert.Equal(t, defaultBufferTimeout, got.router.bufferTimeout, "expected the default buffer timeout")
-				assert.Equal(t, defaultDebounce, got.debounce, "expected the default debounce")
-				assert.Equal(t, defaultQuiesceGrace, got.quiesceGrace, "expected the default quiesce grace")
-				assert.Equal(t, defaultBackoffFloor, got.backoffFloor, "expected the default backoff floor")
-				assert.Equal(t, defaultBackoffCeiling, got.backoffCeiling, "expected the default backoff ceiling")
-			},
-		},
-		{
-			name: "keeps caller-provided timing and sizing knobs",
-			options: func(t *testing.T) Options {
-				t.Helper()
-				opts := validOptions(t)
-				opts.BufferLimit = customBufferLimit
-				opts.BufferTimeout = customBufferTimeout
-				opts.Debounce = customDebounce
-				opts.QuiesceGrace = customQuiesceGrace
-				opts.BackoffFloor = customBackoffFloor
-				opts.BackoffCeiling = customBackoffCeiling
-				return opts
-			},
-			assertReloader: func(t *testing.T, _ Options, got *Reloader) {
-				t.Helper()
-				assert.Equal(
-					t,
-					customBufferLimit,
-					got.router.bufferLimit,
-					"expected the caller-provided buffer limit kept",
-				)
-				assert.Equal(
-					t,
-					customBufferTimeout,
-					got.router.bufferTimeout,
-					"expected the caller-provided buffer timeout kept",
-				)
-				assert.Equal(t, customDebounce, got.debounce,
-					"expected the caller-provided debounce kept")
-				assert.Equal(t, customQuiesceGrace, got.quiesceGrace,
-					"expected the caller-provided quiesce grace kept")
-				assert.Equal(t, customBackoffFloor, got.backoffFloor,
-					"expected the caller-provided backoff floor kept")
-				assert.Equal(t, customBackoffCeiling, got.backoffCeiling,
-					"expected the caller-provided backoff ceiling kept")
-			},
-		},
-		{
-			name: "keeps a caller-provided Logger and Clock",
-			options: func(t *testing.T) Options {
-				t.Helper()
-				opts := validOptions(t)
-				opts.Logger = slog.New(slog.DiscardHandler)
-				opts.Clock = NewMockClock(t)
-				return opts
-			},
-			assertReloader: func(t *testing.T, opts Options, got *Reloader) {
-				t.Helper()
-				assert.Same(t, opts.Logger, got.logger, "expected the caller-provided logger to be kept")
-				assert.Same(t, opts.Clock, got.clock, "expected the caller-provided clock to be kept")
-			},
 		},
 	}
 
@@ -210,8 +130,84 @@ func TestNew(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.NotNil(t, got)
-			tt.assertReloader(t, opts, got)
+
+			// The nil-Logger and nil-Clock defaults must be usable, not just
+			// non-nil: a call issued before any child serves parks in the swap
+			// buffer (its timeout armed via the default real-time clock) and
+			// resolves through caller cancellation without panicking.
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			result, callErr := got.CallTool(ctx, callParams("probe"))
+			require.ErrorIs(t, callErr, context.Canceled,
+				"expected the cancelled pre-first-swap call to surface the context error")
+			assert.Nil(t, result)
 		})
+	}
+}
+
+// TestNewDefaultKnobs proves that zero-valued Options select the documented
+// non-zero defaults, observed behaviorally at the Clock seam: each timing
+// knob surfaces as the duration of a timer the core requests, and the buffer
+// limit surfaces as the buffered call being admitted rather than rejected.
+func TestNewDefaultKnobs(t *testing.T) {
+	t.Parallel()
+
+	clock := newFakeClock()
+	watcher := NewMockWatcher(t)
+	builder := NewMockBuilder(t)
+	events := make(chan ChangeEvent)
+	watcher.EXPECT().Watch(mock.Anything).Return((<-chan ChangeEvent)(events), nil).Once()
+	buildFailed := make(chan struct{}, 1)
+	builder.EXPECT().Build(mock.Anything).RunAndReturn(
+		func(context.Context) (BuildResult, error) {
+			buildFailed <- struct{}{}
+			return BuildResult{}, errors.New("compile error: main.go:1")
+		}).Once()
+
+	r, err := New(Options{
+		Watcher:  watcher,
+		Builder:  builder,
+		Upstream: NewMockUpstream(t),
+		Clock:    clock,
+	})
+	require.NoError(t, err)
+	r.SetFrontend(NewMockFrontend(t))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	// The failed first build schedules its retry at the default backoff floor.
+	awaitSignal(t, buildFailed, "timed out waiting for the cold-start build attempt")
+	clock.awaitTimer(t, defaultBackoffFloor)
+
+	// A change event is coalesced under the default debounce.
+	select {
+	case events <- ChangeEvent{Path: "main.go"}:
+	case <-time.After(awaitDeadline):
+		t.Fatal("timed out delivering a change event to the loop")
+	}
+	clock.awaitTimer(t, defaultDebounce)
+
+	// With no child serving yet, a call is admitted to the swap buffer (the
+	// default limit is non-zero) under the default per-call timeout.
+	results := make(chan callResult, 1)
+	go func() {
+		result, callErr := r.CallTool(t.Context(), callParams("probe"))
+		results <- callResult{result: result, err: callErr}
+	}()
+	clock.awaitTimer(t, defaultBufferTimeout).fire()
+	res := awaitResult(t, results)
+	require.NoError(t, res.err)
+	assert.Equal(t, bufferTimeoutResult("probe"), res.result,
+		"expected the buffered call answered with the timeout result once the default buffer timeout fired")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		require.NoError(t, runErr, "expected Run to return nil on shutdown")
+	case <-time.After(awaitDeadline):
+		t.Fatal("timed out waiting for Run to return")
 	}
 }
 

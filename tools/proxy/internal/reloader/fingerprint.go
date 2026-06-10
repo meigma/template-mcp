@@ -2,20 +2,24 @@ package reloader
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // fingerprintErrorMarker prefixes the placeholder fingerprintTools records
 // for an unfingerprintable definition. It can never equal a real hex
-// fingerprint, and the router's drain gate treats any marker-prefixed
-// fingerprint as never matching.
+// fingerprint, and every change detector treats it conservatively as
+// "changed": fingerprintsEqual never reports a marker as unchanged (so the
+// reconcile skip is suppressed) and the router's drain gate never matches one
+// (so a buffered call gates stale).
 const fingerprintErrorMarker = "!error: "
 
 // Fingerprint returns a deterministic fingerprint of a tool's full wire
@@ -75,21 +79,48 @@ func canonicalJSON(doc []byte) ([]byte, error) {
 // A definition that cannot be fingerprinted should be unreachable — the
 // upstream health gate only admits marshalable definitions — so it is logged
 // loudly and recorded under a deterministic marker that can never equal a
-// real fingerprint: the tool stays visible to change detection and buffered
-// calls against it gate as stale rather than silently matching.
-func fingerprintTools(logger *slog.Logger, tools []*mcp.Tool) map[string]string {
+// real fingerprint: the tool stays visible to change detection while
+// fingerprintsEqual and the router's drain gate both treat it as changed.
+func fingerprintTools(ctx context.Context, logger *slog.Logger, tools []*mcp.Tool) map[string]string {
 	fingerprints := make(map[string]string, len(tools))
 	for _, tool := range tools {
 		if tool == nil {
-			logger.Error("skipping nil tool in snapshot while fingerprinting")
+			logger.ErrorContext(ctx, "skipping nil tool in snapshot while fingerprinting")
 			continue
 		}
 		fingerprint, err := Fingerprint(tool)
 		if err != nil {
-			logger.Error("fingerprinting tool definition failed", "tool", tool.Name, "error", err)
+			logger.ErrorContext(ctx, "fingerprinting tool definition failed", "tool", tool.Name, "error", err)
 			fingerprint = fingerprintErrorMarker + err.Error()
 		}
 		fingerprints[tool.Name] = fingerprint
 	}
 	return fingerprints
+}
+
+// isErrorFingerprint reports whether fingerprint is an error marker recorded
+// by fingerprintTools rather than a real definition fingerprint.
+func isErrorFingerprint(fingerprint string) bool {
+	return strings.HasPrefix(fingerprint, fingerprintErrorMarker)
+}
+
+// fingerprintsEqual reports whether two fingerprint sets describe identical
+// tool definitions. Error-marker fingerprints never compare equal — not even
+// to a byte-identical marker — because an unfingerprintable definition's wire
+// form is unknown, so "unchanged" cannot be trusted. This keeps the
+// reconcile skip consistent with the router's drain gate: a marker counts as
+// changed everywhere, the conservative direction for both (an extra Reconcile
+// is harmless; a skipped one could leave the advertised set wrong, just as a
+// silently matched buffered call could run old arguments on new code).
+func fingerprintsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, fingerprint := range a {
+		other, ok := b[name]
+		if !ok || other != fingerprint || isErrorFingerprint(fingerprint) {
+			return false
+		}
+	}
+	return true
 }

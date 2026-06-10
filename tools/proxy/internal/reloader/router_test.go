@@ -106,7 +106,7 @@ func TestRouterBufferedCallCancellation(t *testing.T) {
 		// not deliver it to the new child, whose mock would fail the test on
 		// any unexpected CallTool.
 		tc.router.Swap(NewMockChildSession(t))
-		tc.router.Drain(fingerprints)
+		tc.router.Drain(t.Context(), fingerprints)
 	})
 
 	t.Run("resolves a cancel-versus-drain race exactly once", func(t *testing.T) {
@@ -142,7 +142,7 @@ func TestRouterBufferedCallCancellation(t *testing.T) {
 			go func() {
 				defer race.Done()
 				tc.router.Swap(child)
-				tc.router.Drain(fingerprints)
+				tc.router.Drain(t.Context(), fingerprints)
 			}()
 			race.Wait()
 
@@ -222,7 +222,7 @@ func TestRouterDrainGating(t *testing.T) {
 			}
 			old := tc.router.Swap(newChild)
 			assert.Same(t, oldChild, old, "expected Swap to hand back the previous child for closing")
-			tc.router.Drain(tt.newFPs)
+			tc.router.Drain(t.Context(), tt.newFPs)
 
 			res := awaitResult(t, results)
 			require.NoError(t, res.err)
@@ -358,7 +358,7 @@ func TestRouterSupersededCallErrors(t *testing.T) {
 			// The orchestration loop swaps once the grace timeout expires;
 			// the old child's in-flight call is now superseded.
 			tc.router.Swap(NewMockChildSession(t))
-			tc.router.Drain(fingerprints)
+			tc.router.Drain(t.Context(), fingerprints)
 
 			close(release)
 
@@ -412,7 +412,7 @@ func TestRouterCallsBufferedBetweenSwapAndDrain(t *testing.T) {
 			results := tc.startCall(t.Context(), callParams(tool))
 			tc.clock.awaitTimer(t, testBufferTimeout)
 
-			tc.router.Drain(tt.drainFPs)
+			tc.router.Drain(t.Context(), tt.drainFPs)
 
 			res := awaitResult(t, results)
 			require.NoError(t, res.err)
@@ -465,7 +465,7 @@ func newRouterContext(t *testing.T) *routerContext {
 func (tc *routerContext) serveChild(child ChildSession, fingerprints map[string]string) {
 	tc.router.Quiesce()
 	tc.router.Swap(child)
-	tc.router.Drain(fingerprints)
+	tc.router.Drain(context.Background(), fingerprints)
 }
 
 // startCall issues CallTool on its own goroutine and returns the channel its

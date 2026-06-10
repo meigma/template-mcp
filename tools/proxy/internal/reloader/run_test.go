@@ -3,6 +3,7 @@ package reloader
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -118,58 +119,64 @@ func TestRunColdStart(t *testing.T) {
 	})
 }
 
-func TestRunBuildFailureKeepsOldChild(t *testing.T) {
+func TestRunCycleFailureKeepsOldChild(t *testing.T) {
 	t.Parallel()
 
-	tc := newRunContext(t)
-	childA := tc.coldStart(t, toolSet("search", "v1"))
+	tests := []struct {
+		name string
+		// armFailure arms one failing cycle and returns the channel that
+		// signals when the failure happened.
+		armFailure func(tc *runContext) <-chan struct{}
+		// recoveryArtifact is what the recovery cycle's build produces; the
+		// health-gate case consumed "art2" on its failed cycle.
+		recoveryArtifact string
+	}{
+		{
+			name: "build failure keeps the old child serving",
+			armFailure: func(tc *runContext) <-chan struct{} {
+				return tc.expectBuildFailure(errors.New("compile error: syntax"))
+			},
+			recoveryArtifact: "art2",
+		},
+		{
+			name: "health-gate failure keeps the old child serving",
+			armFailure: func(tc *runContext) <-chan struct{} {
+				tc.expectBuild("art2")
+				return tc.expectStartFailure("art2", errors.New("health gate: duplicate tool names"))
+			},
+			recoveryArtifact: "art3",
+		},
+	}
 
-	buildFailed := tc.expectBuildFailure(errors.New("compile error: syntax"))
-	tc.triggerChangeAndDebounce(t)
-	awaitSignal(t, buildFailed, "timed out waiting for the failed build")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	tc.assertServedBy(t, childA, "search")
+			tc := newRunContext(t)
+			childA := tc.coldStart(t, toolSet("search", "v1"))
 
-	// The next save retriggers and recovers without any backoff machinery.
-	toolsV2 := toolSet("search", "v2")
-	childB := tc.newChild(t, toolsV2)
-	tc.expectBuild("art2")
-	tc.expectStart("art2", childB)
-	reconciled := tc.expectReconcile(toolsV2, nil)
-	childA.expectClose()
-	childB.expectClose()
-	tc.triggerChangeAndDebounce(t)
+			failed := tt.armFailure(tc)
+			tc.triggerChangeAndDebounce(t)
+			awaitSignal(t, failed, "timed out waiting for the cycle to fail")
 
-	awaitSignal(t, reconciled, "timed out waiting for the recovery cycle to reconcile")
-	assert.Zero(t, tc.clock.timerCount(runBackoffFloor),
-		"expected no backoff retry scheduled while a healthy child serves")
-}
+			tc.assertServedBy(t, childA, "search")
 
-func TestRunStartFailureKeepsOldChild(t *testing.T) {
-	t.Parallel()
+			// The next save retriggers and recovers without any backoff
+			// machinery.
+			toolsV2 := toolSet("search", "v2")
+			childB := tc.newChild(t, toolsV2)
+			tc.expectBuild(tt.recoveryArtifact)
+			tc.expectStart(tt.recoveryArtifact, childB)
+			reconciled := tc.expectReconcile(toolsV2, nil)
+			childA.expectClose()
+			childB.expectClose()
+			tc.triggerChangeAndDebounce(t)
 
-	tc := newRunContext(t)
-	childA := tc.coldStart(t, toolSet("search", "v1"))
-
-	tc.expectBuild("art2")
-	startFailed := tc.expectStartFailure("art2", errors.New("health gate: duplicate tool names"))
-	tc.triggerChangeAndDebounce(t)
-	awaitSignal(t, startFailed, "timed out waiting for the failed health gate")
-
-	tc.assertServedBy(t, childA, "search")
-
-	toolsV2 := toolSet("search", "v2")
-	childB := tc.newChild(t, toolsV2)
-	tc.expectBuild("art3")
-	tc.expectStart("art3", childB)
-	reconciled := tc.expectReconcile(toolsV2, nil)
-	childA.expectClose()
-	childB.expectClose()
-	tc.triggerChangeAndDebounce(t)
-
-	awaitSignal(t, reconciled, "timed out waiting for the recovery cycle to reconcile")
-	assert.Zero(t, tc.clock.timerCount(runBackoffFloor),
-		"expected no backoff retry scheduled while a healthy child serves")
+			awaitSignal(t, reconciled, "timed out waiting for the recovery cycle to reconcile")
+			assert.Zero(t, tc.clock.timerCount(runBackoffFloor),
+				"expected no backoff retry scheduled while a healthy child serves")
+		})
+	}
 }
 
 func TestRunSuccessfulCycleSwaps(t *testing.T) {
@@ -466,6 +473,53 @@ func TestRunCrashMidCycleAbsorbed(t *testing.T) {
 			"expected no backoff retry for a crash absorbed by the in-flight cycle")
 	})
 
+	t.Run("calls arriving after a mid-cycle crash buffer until the cycle swaps", func(t *testing.T) {
+		t.Parallel()
+
+		// The loop's only observable side effects for a mid-cycle crash are
+		// router quiescence and the "noted" log line, which onChildDied emits
+		// after quiescing — so the signal proves the crash-window is buffering
+		// before the test issues its call.
+		crashNoted := make(chan struct{}, 1)
+		tc := newRunContextWithLogger(t, slog.New(&logSignaler{
+			message: "child died during an in-flight reload cycle; the cycle replaces it",
+			signals: crashNoted,
+		}))
+		childA := tc.coldStart(t, toolSet("search", "v1"))
+
+		// The cycle's child serves a byte-identical definition so the buffered
+		// call can drain to it; the identical set means no Reconcile is armed.
+		childB := tc.newChild(t, toolSet("search", "v1"))
+		tc.expectBuild("art2")
+		release := make(chan struct{})
+		startBegan := tc.expectBlockedStart("art2", childB, release)
+		childA.expectClose()
+		childB.expectClose()
+
+		tc.triggerChangeAndDebounce(t)
+		awaitSignal(t, startBegan, "timed out waiting for the cycle to reach Start")
+
+		childA.crash()
+		awaitSignal(t, crashNoted, "timed out waiting for the loop to note the mid-cycle crash")
+
+		// The crash-window call parks in the swap buffer — the dead child's
+		// mock has no CallTool armed, so dispatching to its dead transport
+		// would fail the test loudly.
+		buffered := tc.startCall(t.Context(), callParams("search"))
+		tc.clock.awaitTimer(t, runBufferTimeout) // the call is parked
+
+		want := textResult("served by the cycle's child")
+		childB.mock.EXPECT().CallTool(mock.Anything, mock.Anything).Return(want, nil).Once()
+		close(release) // the cycle completes and swaps
+
+		bufRes := awaitResult(t, buffered)
+		require.NoError(t, bufRes.err)
+		assert.Same(t, want, bufRes.result,
+			"expected the crash-window call buffered, then drained to the cycle's child")
+		assert.Zero(t, tc.clock.timerCount(runBackoffFloor),
+			"expected no backoff retry for a crash absorbed by the in-flight cycle")
+	})
+
 	t.Run("a failed cycle after a mid-cycle crash buffers calls and schedules a build-free retry", func(t *testing.T) {
 		t.Parallel()
 
@@ -545,6 +599,25 @@ func TestRunToolsChangedReconciles(t *testing.T) {
 	awaitSignal(t, reconciledV3, "timed out waiting for the next runtime tool-change reconcile")
 
 	tc.assertServedBy(t, childA, "search")
+}
+
+func TestRunErrorMarkerFingerprintsSuppressReconcileSkip(t *testing.T) {
+	t.Parallel()
+
+	tc := newRunContext(t)
+	tools := []*mcp.Tool{unmarshalableToolFixture()}
+	childA := tc.coldStart(t, tools)
+	childA.expectClose()
+
+	// The runtime snapshot is byte-identical, but its fingerprint is an error
+	// marker: the wire form is unknown, so "unchanged" cannot be trusted and
+	// the identical-set skip must not apply — the same conservative direction
+	// the router's drain gate takes for marker fingerprints.
+	reconciled := tc.expectReconcile(tools, nil)
+	tc.sendTools(t, childA, tools)
+	awaitSignal(t, reconciled, "timed out waiting for the marker-fingerprint snapshot to reconcile")
+
+	tc.assertServedBy(t, childA, "bad")
 }
 
 func TestRunFailedReconcileRetriedOnNextCycle(t *testing.T) {
@@ -680,6 +753,15 @@ type runContext struct {
 func newRunContext(t *testing.T) *runContext {
 	t.Helper()
 
+	return newRunContextWithLogger(t, nil)
+}
+
+// newRunContextWithLogger is newRunContext with an explicit logger, for tests
+// that synchronize on the loop's log output. A nil logger selects the no-op
+// default.
+func newRunContextWithLogger(t *testing.T, logger *slog.Logger) *runContext {
+	t.Helper()
+
 	tc := &runContext{
 		watcher:  NewMockWatcher(t),
 		builder:  NewMockBuilder(t),
@@ -694,6 +776,7 @@ func newRunContext(t *testing.T) *runContext {
 		Watcher:        tc.watcher,
 		Builder:        tc.builder,
 		Upstream:       tc.upstream,
+		Logger:         logger,
 		Clock:          tc.clock,
 		Debounce:       runDebounce,
 		QuiesceGrace:   runQuiesceGrace,
@@ -933,3 +1016,28 @@ func (c *testChild) crash() {
 func toolSet(name, version string) []*mcp.Tool {
 	return []*mcp.Tool{{Name: name, Description: version}}
 }
+
+// logSignaler is a [slog.Handler] that signals (non-blocking) each record
+// whose message matches. Tests use it to synchronize on loop transitions that
+// have no port-level side effect to await — for example the noted-and-ignored
+// mid-cycle crash, whose contract is router quiescence plus the log line.
+type logSignaler struct {
+	message string
+	signals chan<- struct{}
+}
+
+func (s *logSignaler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (s *logSignaler) Handle(_ context.Context, record slog.Record) error {
+	if record.Message == s.message {
+		select {
+		case s.signals <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+func (s *logSignaler) WithAttrs([]slog.Attr) slog.Handler { return s }
+
+func (s *logSignaler) WithGroup(string) slog.Handler { return s }

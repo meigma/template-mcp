@@ -19,6 +19,12 @@ type Builder interface {
 	// Build runs one build. A non-nil error means "keep the old child".
 	// The BuildResult carries the unique artifact path for this cycle and
 	// any compile output for surfacing to the developer.
+	//
+	// Build must honor ctx and return promptly once it is cancelled
+	// (typically with ctx.Err()). The core's cancel-and-supersede and
+	// shutdown paths block until the in-flight cycle's Build or Start
+	// returns, so an implementation that ignores cancellation stalls
+	// reloads and shutdown alike.
 	Build(ctx context.Context) (BuildResult, error)
 }
 
@@ -29,6 +35,13 @@ type Upstream interface {
 	// definition (schema present, object-typed, marshalable — the
 	// downstream AddTool panics otherwise). Invalid tools fail the gate.
 	// A non-nil error means "keep the old child".
+	//
+	// Start must honor ctx and return promptly once it is cancelled —
+	// either with an error after tearing down the half-started child, or
+	// with the live session, which the core then closes. The core's
+	// cancel-and-supersede and shutdown paths block until the in-flight
+	// cycle's Build or Start returns, so an implementation that ignores
+	// cancellation stalls reloads and shutdown alike.
 	Start(ctx context.Context, artifact string) (ChildSession, error)
 }
 

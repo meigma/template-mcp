@@ -79,21 +79,27 @@ func (r *Reloader) runCycle(ctx context.Context, artifact string, results chan<-
 
 // performSwap runs the quiesce, swap, reconcile, drain sequence inline in the
 // run loop — swap is the critical section the loop serializes anyway, and the
-// wait is bounded by the quiesce grace.
+// wait is bounded by the quiesce grace. It returns the new tool set's
+// fingerprints and whether the frontend now advertises that set.
 //
 // The drained channel is checked non-blocking first: in the common idle case
 // Quiesce returns a pre-closed channel and no grace timer is ever created.
 // Reconcile is skipped entirely when the new fingerprint set equals the old —
-// an identical tool set produces zero Frontend calls. A Reconcile error is
+// an identical tool set produces zero Frontend calls — unless frontendStale
+// reports that the last Reconcile failed, in which case the advertised set
+// cannot be trusted to match and the skip is suppressed. A Reconcile error is
 // logged loudly and the new child serves anyway: its definitions were already
 // validated by the health gate, and dev-loop availability beats killing a
-// healthy child. On ctx cancellation during the quiesce wait the candidate is
-// closed and errSwapAborted returned.
+// healthy child. The router's fingerprints are installed by Drain, not Swap,
+// so calls buffered mid-swap record the definitions the client could still
+// see at ingress. On ctx cancellation during the quiesce wait the candidate
+// is closed and errSwapAborted returned.
 func (r *Reloader) performSwap(
 	ctx context.Context,
 	candidate ChildSession,
 	currentFPs map[string]string,
-) (map[string]string, error) {
+	frontendStale bool,
+) (map[string]string, bool, error) {
 	r.logger.InfoContext(ctx, "swapping in the new child", "state", "SWAPPING")
 	drained := r.router.Quiesce()
 	select {
@@ -107,22 +113,26 @@ func (r *Reloader) performSwap(
 				"grace", r.quiesceGrace)
 		case <-ctx.Done():
 			r.closeChild(ctx, candidate, "candidate")
-			return nil, errSwapAborted
+			return nil, false, errSwapAborted
 		}
 	}
 
 	tools := candidate.Tools()
 	fps := fingerprintTools(r.logger, tools)
-	if old := r.router.Swap(candidate, fps); old != nil {
+	if old := r.router.Swap(candidate); old != nil {
 		r.closeChild(ctx, old, "previous")
 	}
-	if maps.Equal(fps, currentFPs) {
+	reconciled := true
+	if !frontendStale && maps.Equal(fps, currentFPs) {
 		r.logger.DebugContext(ctx, "tool set unchanged: skipping reconcile")
 	} else if err := r.frontend.Reconcile(tools, r.CallTool); err != nil {
-		r.logger.ErrorContext(ctx, "reconcile after swap failed; serving the new child anyway", "error", err)
+		reconciled = false
+		r.logger.ErrorContext(ctx,
+			"reconcile after swap failed; serving the new child anyway and retrying on the next reconcile",
+			"error", err)
 	}
-	r.router.Drain()
-	return fps, nil
+	r.router.Drain(fps)
+	return fps, reconciled, nil
 }
 
 // nextBackoff advances the retry delay: from the floor when current is zero,
@@ -143,9 +153,10 @@ func (r *Reloader) closeChild(ctx context.Context, child ChildSession, role stri
 }
 
 // runLoop is the orchestration state, owned exclusively by the single Run
-// goroutine. There is no state-machine enum: the §4 states appear only as
-// slog attributes on transition logs, and a nil channel disables its select
-// case (currentDone, currentTools, debounceCh, retryCh).
+// goroutine. There is no state-machine enum: the lifecycle states from §4 of
+// the design document (tools/proxy/DESIGN.md) appear only as slog attributes
+// on transition logs, and a nil channel disables its select case
+// (currentDone, currentTools, debounceCh, retryCh).
 type runLoop struct {
 	r      *Reloader
 	events <-chan ChangeEvent
@@ -159,6 +170,10 @@ type runLoop struct {
 	// cycle schedule a retry instead of "keeping" a dead child.
 	currentDead bool
 	currentFPs  map[string]string
+	// frontendStale records that the last Reconcile failed: the advertised
+	// set may not match currentFPs, so the next swap or runtime tool change
+	// must reconcile even when the fingerprints are identical.
+	frontendStale bool
 
 	// cycleCancel is non-nil exactly while a cycle goroutine is in flight.
 	cycleCancel  context.CancelFunc
@@ -211,6 +226,12 @@ func (l *runLoop) run(ctx context.Context) error {
 
 		case <-l.retryCh:
 			l.retryCh = nil
+			if l.cycleCancel != nil {
+				// Never overwrite an in-flight cycle: it owns recovery, and
+				// its failure path re-arms the retry. onChange and onDebounce
+				// clear a pending retry, so this is a last-resort guard.
+				continue
+			}
 			l.r.logger.InfoContext(ctx, "retrying reload cycle",
 				"state", "BUILDING", "artifact", l.retryArtifact, "backoff", l.backoff)
 			l.startCycle(ctx, l.retryArtifact)
@@ -232,9 +253,13 @@ func (l *runLoop) onChange(ctx context.Context, ev ChangeEvent) {
 }
 
 // onDebounce starts a reload cycle, or cancels-and-supersedes the one in
-// flight so exactly one final cycle runs against the newest source.
+// flight so exactly one final cycle runs against the newest source. A pending
+// backoff retry is dropped for the same reason onChange drops it: the fresh
+// cycle supersedes any restart of the old artifact, and a retry firing into
+// an in-flight cycle would race two children for one downstream session.
 func (l *runLoop) onDebounce(ctx context.Context) {
 	l.debounceCh = nil
+	l.retryCh = nil
 	if l.cycleCancel != nil {
 		l.r.logger.InfoContext(ctx, "change during reload cycle: cancelling and superseding")
 		l.cycleCancel()
@@ -268,12 +293,13 @@ func (l *runLoop) onCycleResult(ctx context.Context, res cycleResult) error {
 		return nil //nolint:nilerr // A failed cycle keeps serving (or retries); it never stops the loop.
 	}
 
-	fps, err := l.r.performSwap(ctx, res.child, l.currentFPs)
+	fps, reconciled, err := l.r.performSwap(ctx, res.child, l.currentFPs, l.frontendStale)
 	if err != nil {
 		return err
 	}
 	l.current = res.child
 	l.currentFPs = fps
+	l.frontendStale = !reconciled
 	l.currentDone = res.child.Done()
 	l.currentTools = res.child.ToolsChanged()
 	l.currentDead = false
@@ -285,15 +311,18 @@ func (l *runLoop) onCycleResult(ctx context.Context, res cycleResult) error {
 
 // onCycleFailure keeps the old child serving when it is healthy — the next
 // save retriggers — and otherwise schedules a backoff retry so a failed first
-// build or a dead child is never stranded. The retry restarts the last good
-// artifact build-free; before any child ever served, lastArtifact is empty
-// and the retry runs a full build.
+// build or a dead child is never stranded. With no healthy child the router
+// is quiesced first, so retry-window calls buffer instead of dispatching to a
+// dead transport — the same treatment the crash-in-SERVING window gets. The
+// retry restarts the last good artifact build-free; before any child ever
+// served, lastArtifact is empty and the retry runs a full build.
 func (l *runLoop) onCycleFailure(ctx context.Context, cycleErr error) {
 	l.r.logger.ErrorContext(ctx, "reload cycle failed", "error", cycleErr)
 	if l.current != nil && !l.currentDead {
 		l.r.logger.InfoContext(ctx, "keeping the current child", "state", "SERVING")
 		return
 	}
+	l.r.router.Quiesce()
 	l.backoff = l.r.nextBackoff(l.backoff)
 	l.retryArtifact = l.lastArtifact
 	l.retryCh = l.r.clock.After(l.backoff)
@@ -303,8 +332,9 @@ func (l *runLoop) onCycleFailure(ctx context.Context, cycleErr error) {
 // onChildDied handles the serving child's Done firing. Mid-cycle it is noted
 // and otherwise ignored — the cycle already replaces the child. In SERVING it
 // quiesces the router so restart-window calls buffer instead of erroring on a
-// dead transport, and schedules a build-free restart of the last artifact
-// with backoff.
+// dead transport, then starts an immediate build-free restart of the last
+// artifact: the first attempt waits for nothing, and exponential backoff
+// applies only to consecutive failures via onCycleFailure.
 func (l *runLoop) onChildDied(ctx context.Context) {
 	l.currentDone = nil
 	l.currentDead = true
@@ -313,31 +343,34 @@ func (l *runLoop) onChildDied(ctx context.Context) {
 		return
 	}
 	l.r.router.Quiesce()
-	l.backoff = l.r.nextBackoff(l.backoff)
-	l.retryArtifact = l.lastArtifact
-	l.retryCh = l.r.clock.After(l.backoff)
-	l.r.logger.ErrorContext(ctx, "child died while serving: restart scheduled",
-		"artifact", l.lastArtifact, "backoff", l.backoff)
+	l.r.logger.ErrorContext(ctx, "child died while serving: restarting immediately",
+		"state", "STARTING", "artifact", l.lastArtifact)
+	l.startCycle(ctx, l.lastArtifact)
 }
 
 // onToolsChanged reconciles a child runtime tool change without a restart. An
-// identical snapshot is skipped outright; otherwise the router's fingerprints
-// are updated first, so ingress recording reflects what the child now serves,
-// then the frontend reconciles. A Reconcile error is logged loudly and the
-// child keeps serving.
+// identical snapshot is skipped outright — unless the last Reconcile failed,
+// in which case the advertised set may not match and the skip is suppressed.
+// Otherwise the router's fingerprints are updated first, so ingress recording
+// reflects what the child now serves, then the frontend reconciles. A
+// Reconcile error is logged loudly, the child keeps serving, and the failure
+// is recorded so the next opportunity retries.
 func (l *runLoop) onToolsChanged(ctx context.Context, tools []*mcp.Tool, ok bool) {
 	if !ok {
 		l.currentTools = nil
 		return
 	}
 	fps := fingerprintTools(l.r.logger, tools)
-	if maps.Equal(fps, l.currentFPs) {
+	if !l.frontendStale && maps.Equal(fps, l.currentFPs) {
 		l.r.logger.DebugContext(ctx, "child runtime tool change is identical: skipping reconcile")
 		return
 	}
 	l.r.router.SetFingerprints(fps)
+	l.frontendStale = false
 	if err := l.r.frontend.Reconcile(tools, l.r.CallTool); err != nil {
-		l.r.logger.ErrorContext(ctx, "reconcile after child runtime tool change failed; still serving",
+		l.frontendStale = true
+		l.r.logger.ErrorContext(ctx,
+			"reconcile after child runtime tool change failed; still serving and retrying on the next reconcile",
 			"error", err)
 	}
 	l.currentFPs = fps

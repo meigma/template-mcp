@@ -253,13 +253,13 @@ func TestRunIdenticalToolSetSkipsReconcile(t *testing.T) {
 	// The crash restart serves byte-identical definitions: no Reconcile (and
 	// no Build) is armed, so either call would fail the test as unexpected.
 	childB := tc.newChild(t, toolSet("search", "v1"))
-	tc.expectStart(coldStartArtifact, childB)
+	started := tc.expectStartSignaled(coldStartArtifact, childB)
 	childA.expectClose()
 	childB.expectClose()
 
 	childA.crash()
-	tc.clock.awaitTimer(t, runBackoffFloor).fire()
 
+	awaitSignal(t, started, "timed out waiting for the immediate crash restart")
 	tc.assertServedBy(t, childB, "search")
 }
 
@@ -333,7 +333,9 @@ func TestRunCrashRestartsWithBackoff(t *testing.T) {
 	childA := tc.coldStart(t, toolSet("search", "v1"))
 
 	// No Build is armed past the cold start: the crash restart must reuse
-	// the last good artifact. Two restart attempts fail before one succeeds.
+	// the last good artifact. The first attempt is immediate — no timer —
+	// and it plus the first backoff retry fail before the second retry
+	// succeeds.
 	tc.upstream.EXPECT().Start(mock.Anything, coldStartArtifact).Return(nil, errors.New("spawn failed")).Twice()
 	toolsV2 := toolSet("search", "v2")
 	childB := tc.newChild(t, toolsV2)
@@ -342,18 +344,64 @@ func TestRunCrashRestartsWithBackoff(t *testing.T) {
 	childA.expectClose()
 	childB.expectClose()
 
-	childA.crash()
-	tc.clock.awaitTimer(t, runBackoffFloor).fire()
-	tc.clock.awaitTimer(t, 2*runBackoffFloor).fire() // doubled after the first failure
-	tc.clock.awaitTimer(t, 4*runBackoffFloor).fire() // and doubled again
+	childA.crash()                                   // the immediate restart attempt fails
+	tc.clock.awaitTimer(t, runBackoffFloor).fire()   // first retry, at the floor, fails
+	tc.clock.awaitTimer(t, 2*runBackoffFloor).fire() // doubled retry succeeds
 
 	awaitSignal(t, reconciled, "timed out waiting for the restarted child to reconcile")
 	tc.assertServedBy(t, childB, "search")
 
-	// A later crash starts back at the floor: the successful swap reset the
-	// backoff.
+	// A later crash restarts immediately again and, when that attempt fails,
+	// backs off from the floor: the successful swap reset the backoff.
+	tc.upstream.EXPECT().Start(mock.Anything, coldStartArtifact).Return(nil, errors.New("spawn failed")).Once()
 	childB.crash()
 	tc.clock.awaitTimer(t, runBackoffFloor)
+}
+
+func TestRunDebouncedCycleDropsPendingRetry(t *testing.T) {
+	t.Parallel()
+
+	tc := newRunContext(t)
+
+	// The cold-start cycle blocks in Build so a source change can land while
+	// it is in flight, then fails with no healthy child to keep: a backoff
+	// retry is armed while the change's debounce is still pending.
+	releaseBuild := make(chan struct{})
+	buildBegan := make(chan struct{}, 1)
+	tc.builder.EXPECT().Build(mock.Anything).RunAndReturn(
+		func(context.Context) (BuildResult, error) {
+			buildBegan <- struct{}{}
+			<-releaseBuild
+			return BuildResult{}, errors.New("compile error: main.go:1")
+		}).Once()
+	tc.start(t)
+	awaitSignal(t, buildBegan, "timed out waiting for the first build attempt")
+
+	tc.sendChange(t)
+	debounce := tc.clock.awaitTimer(t, runDebounce)
+	close(releaseBuild)
+	retry := tc.clock.awaitTimer(t, runBackoffFloor) // the failure armed a retry
+
+	// The debounce starts the fresh full-build cycle, dropping the pending
+	// retry; the cycle blocks in Start to hold the in-flight window open.
+	toolsV1 := toolSet("search", "v1")
+	child := tc.newChild(t, toolsV1)
+	tc.expectBuild("art2")
+	releaseStart := make(chan struct{})
+	startBegan := tc.expectBlockedStart("art2", child, releaseStart)
+	reconciled := tc.expectReconcile(toolsV1, nil)
+	child.expectClose()
+	debounce.fire()
+	awaitSignal(t, startBegan, "timed out waiting for the debounced cycle to reach Start")
+
+	// The stale retry firing mid-cycle must not start a second cycle racing
+	// the first for the downstream session: a second cycle would run an
+	// unexpected extra Build and orphan one of the two children.
+	retry.fire()
+	close(releaseStart)
+
+	awaitSignal(t, reconciled, "timed out waiting for the single fresh cycle to reconcile")
+	tc.assertServedBy(t, child, "search")
 }
 
 func TestRunCrashMidCycleAbsorbed(t *testing.T) {
@@ -386,7 +434,7 @@ func TestRunCrashMidCycleAbsorbed(t *testing.T) {
 			"expected no backoff retry for a crash absorbed by the in-flight cycle")
 	})
 
-	t.Run("a failed cycle after a mid-cycle crash schedules a build-free retry", func(t *testing.T) {
+	t.Run("a failed cycle after a mid-cycle crash buffers calls and schedules a build-free retry", func(t *testing.T) {
 		t.Parallel()
 
 		tc := newRunContext(t)
@@ -408,6 +456,13 @@ func TestRunCrashMidCycleAbsorbed(t *testing.T) {
 		childA.crash()
 		close(release) // the cycle now fails with no healthy child left
 
+		// The failure quiesces the router: a retry-window call parks in the
+		// swap buffer — the dead child's mock has no CallTool armed, so a
+		// dispatch to its dead transport would fail the test loudly.
+		retry := tc.clock.awaitTimer(t, runBackoffFloor)
+		buffered := tc.startCall(t.Context(), callParams("search"))
+		tc.clock.awaitTimer(t, runBufferTimeout) // the call is parked
+
 		toolsV2 := toolSet("search", "v2")
 		childB := tc.newChild(t, toolsV2)
 		tc.expectStart(coldStartArtifact, childB) // build-free restart of the last artifact
@@ -415,9 +470,13 @@ func TestRunCrashMidCycleAbsorbed(t *testing.T) {
 		childA.expectClose()
 		childB.expectClose()
 
-		tc.clock.awaitTimer(t, runBackoffFloor).fire()
+		retry.fire()
 
 		awaitSignal(t, reconciled, "timed out waiting for the rescue restart to reconcile")
+		bufRes := awaitResult(t, buffered)
+		require.NoError(t, bufRes.err, "expected the retry-window call buffered, not failed on the dead child")
+		assert.Equal(t, StaleReloadResult("search"), bufRes.result,
+			"expected the buffered call gated stale: the rescue child changed the definition")
 		tc.assertServedBy(t, childB, "search")
 	})
 }
@@ -433,20 +492,58 @@ func TestRunToolsChangedReconciles(t *testing.T) {
 	// must reconcile without a restart. The first reconcile fails to prove
 	// the child keeps serving through a Frontend error.
 	toolsV2 := toolSet("search", "v2")
-	reconciledV2 := tc.expectReconcile(toolsV2, errors.New("frontend rejected a definition"))
+	reconcileFailed := tc.expectReconcile(toolsV2, errors.New("frontend rejected a definition"))
 	tc.sendTools(t, childA, toolsV2)
-	awaitSignal(t, reconciledV2, "timed out waiting for the runtime tool-change reconcile")
+	awaitSignal(t, reconcileFailed, "timed out waiting for the runtime tool-change reconcile")
 
-	// An identical snapshot is skipped outright: no Reconcile is armed for
-	// it, and the next distinct snapshot proves the loop consumed it.
+	// After a failed reconcile the advertised set cannot be trusted, so an
+	// identical snapshot must retry instead of being skipped.
+	reconcileRetried := tc.expectReconcile(toolsV2, nil)
+	tc.sendTools(t, childA, toolSet("search", "v2"))
+	awaitSignal(t, reconcileRetried, "timed out waiting for the reconcile retry on the identical snapshot")
+
+	// Once healed, an identical snapshot is skipped outright: no Reconcile is
+	// armed for it, and the next distinct snapshot proves the loop consumed
+	// it.
 	tc.sendTools(t, childA, toolSet("search", "v2"))
 
 	toolsV3 := toolSet("search", "v3")
 	reconciledV3 := tc.expectReconcile(toolsV3, nil)
 	tc.sendTools(t, childA, toolsV3)
-	awaitSignal(t, reconciledV3, "timed out waiting for the second runtime tool-change reconcile")
+	awaitSignal(t, reconciledV3, "timed out waiting for the next runtime tool-change reconcile")
 
 	tc.assertServedBy(t, childA, "search")
+}
+
+func TestRunFailedReconcileRetriedOnNextCycle(t *testing.T) {
+	t.Parallel()
+
+	tc := newRunContext(t)
+	childA := tc.coldStart(t, toolSet("search", "v1"))
+
+	// The swap to childB serves v2 but its reconcile fails: the advertised
+	// set no longer matches the served set.
+	toolsV2 := toolSet("search", "v2")
+	childB := tc.newChild(t, toolsV2)
+	tc.expectBuild("art2")
+	tc.expectStart("art2", childB)
+	reconcileFailed := tc.expectReconcile(toolsV2, errors.New("frontend rejected a definition"))
+	childA.expectClose()
+	tc.triggerChangeAndDebounce(t)
+	awaitSignal(t, reconcileFailed, "timed out waiting for the failing reconcile")
+
+	// The next cycle serves the fingerprint-identical set: the identical-set
+	// skip must not suppress the retry that heals the advertised set.
+	childC := tc.newChild(t, toolSet("search", "v2"))
+	tc.expectBuild("art3")
+	tc.expectStart("art3", childC)
+	reconcileRetried := tc.expectReconcile(toolsV2, nil)
+	childB.expectClose()
+	childC.expectClose()
+	tc.triggerChangeAndDebounce(t)
+
+	awaitSignal(t, reconcileRetried, "timed out waiting for the reconcile retry on the identical set")
+	tc.assertServedBy(t, childC, "search")
 }
 
 func TestRunSwapProceedsAfterGraceTimeout(t *testing.T) {
@@ -650,6 +747,19 @@ func (tc *runContext) expectBuildFailure(err error) <-chan struct{} {
 // expectStart arms one successful Start of artifact yielding child.
 func (tc *runContext) expectStart(artifact string, child *testChild) {
 	tc.upstream.EXPECT().Start(mock.Anything, artifact).Return(child.mock, nil).Once()
+}
+
+// expectStartSignaled arms one successful Start of artifact yielding child;
+// the returned channel signals when it ran. Crash tests await it because an
+// immediate restart creates no timer to synchronize on.
+func (tc *runContext) expectStartSignaled(artifact string, child *testChild) <-chan struct{} {
+	started := make(chan struct{}, 1)
+	tc.upstream.EXPECT().Start(mock.Anything, artifact).RunAndReturn(
+		func(context.Context, string) (ChildSession, error) {
+			started <- struct{}{}
+			return child.mock, nil
+		}).Once()
+	return started
 }
 
 // expectStartFailure arms one failing Start; the returned channel signals

@@ -137,9 +137,9 @@ func TestRouterDrainGating(t *testing.T) {
 			if !tt.wantStale {
 				newChild.EXPECT().CallTool(mock.Anything, mock.Anything).Return(want, nil).Once()
 			}
-			old := tc.router.Swap(newChild, tt.newFPs)
+			old := tc.router.Swap(newChild)
 			assert.Same(t, oldChild, old, "expected Swap to hand back the previous child for closing")
-			tc.router.Drain()
+			tc.router.Drain(tt.newFPs)
 
 			res := awaitResult(t, results)
 			require.NoError(t, res.err)
@@ -241,29 +241,17 @@ func TestRouterSupersededCallErrors(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		childResult  *mcp.CallToolResult
-		childErr     error
-		assertResult func(t *testing.T, res callResult)
+		name        string
+		childResult *mcp.CallToolResult
+		childErr    error
 	}{
 		{
 			name:     "rewrites an error from a superseded child to the interrupted result",
 			childErr: errors.New("child terminated"),
-			assertResult: func(t *testing.T, res callResult) {
-				t.Helper()
-				require.NoError(t, res.err, "expected the superseded error rewritten, not surfaced as a Go error")
-				assert.Equal(t, supersededResult("slow-op"), res.result)
-			},
 		},
 		{
-			name:        "passes a late success from a superseded child through",
+			name:        "rewrites a late success from a superseded child to the interrupted result",
 			childResult: textResult("late but complete"),
-			assertResult: func(t *testing.T, res callResult) {
-				t.Helper()
-				require.NoError(t, res.err)
-				assert.Equal(t, textResult("late but complete"), res.result,
-					"expected the completed result delivered, not discarded")
-			},
 		},
 	}
 
@@ -286,12 +274,71 @@ func TestRouterSupersededCallErrors(t *testing.T) {
 
 			// The orchestration loop swaps once the grace timeout expires;
 			// the old child's in-flight call is now superseded.
-			tc.router.Swap(NewMockChildSession(t), fingerprints)
-			tc.router.Drain()
+			tc.router.Swap(NewMockChildSession(t))
+			tc.router.Drain(fingerprints)
 
 			close(release)
 
-			tt.assertResult(t, awaitResult(t, results))
+			res := awaitResult(t, results)
+			require.NoError(t, res.err, "expected the superseded completion rewritten, not surfaced as a Go error")
+			assert.Equal(t, supersededResult("slow-op"), res.result,
+				"expected any completion on a superseded child answered with the interrupted result")
+		})
+	}
+}
+
+func TestRouterCallsBufferedBetweenSwapAndDrain(t *testing.T) {
+	t.Parallel()
+
+	// A call landing after Swap but before Drain was issued against the old
+	// generation's still-advertised definitions: ingress must record the old
+	// fingerprint, so the drain gate forwards only when the swap kept the
+	// definition identical and never silently runs a changed tool on new code.
+	const tool = "search"
+	tests := []struct {
+		name      string
+		drainFPs  map[string]string
+		wantStale bool
+	}{
+		{
+			name:     "forwards when the swap kept the definition identical",
+			drainFPs: map[string]string{tool: "fp-old"},
+		},
+		{
+			name:      "answers stale when the swap changed the definition",
+			drainFPs:  map[string]string{tool: "fp-new"},
+			wantStale: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tc := newRouterContext(t)
+			tc.serveChild(NewMockChildSession(t), map[string]string{tool: "fp-old"})
+			tc.router.Quiesce()
+
+			newChild := NewMockChildSession(t)
+			want := textResult("served by the new child")
+			if !tt.wantStale {
+				newChild.EXPECT().CallTool(mock.Anything, mock.Anything).Return(want, nil).Once()
+			}
+			tc.router.Swap(newChild)
+
+			results := tc.startCall(t.Context(), callParams(tool))
+			tc.clock.awaitTimer(t, testBufferTimeout)
+
+			tc.router.Drain(tt.drainFPs)
+
+			res := awaitResult(t, results)
+			require.NoError(t, res.err)
+			if tt.wantStale {
+				assert.Equal(t, StaleReloadResult(tool), res.result,
+					"expected the mid-swap call gated stale against its ingress definition")
+			} else {
+				assert.Same(t, want, res.result, "expected the mid-swap call drained to the new child")
+			}
 		})
 	}
 }
@@ -334,8 +381,8 @@ func newRouterContext(t *testing.T) *routerContext {
 // quiesce, swap, drain sequence.
 func (tc *routerContext) serveChild(child ChildSession, fingerprints map[string]string) {
 	tc.router.Quiesce()
-	tc.router.Swap(child, fingerprints)
-	tc.router.Drain()
+	tc.router.Swap(child)
+	tc.router.Drain(fingerprints)
 }
 
 // startCall issues CallTool on its own goroutine and returns the channel its

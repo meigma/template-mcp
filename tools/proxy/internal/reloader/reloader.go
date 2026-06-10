@@ -11,8 +11,8 @@ import (
 )
 
 // Default values for the Options timing and sizing knobs. They are first-pass
-// dev-loop numbers (design §10.7 defers tuning); the CLI exposes flags for
-// them in a later milestone.
+// dev-loop numbers (tools/proxy/DESIGN.md §10.7 defers tuning); the CLI
+// exposes flags for them in a later milestone.
 const (
 	// defaultDebounce is how long source-change events are coalesced before
 	// a reload cycle starts.

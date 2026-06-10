@@ -40,7 +40,11 @@ type router struct {
 	generation uint64
 	// fingerprints maps tool name to the Fingerprint of the definition
 	// the downstream client could currently see. Buffered calls record
-	// their tool's entry at ingress; Drain gates release on it.
+	// their tool's entry at ingress; Drain gates release on it. Swap
+	// deliberately does not replace the map — a call buffered between Swap
+	// and Drain was issued against the definitions still advertised
+	// downstream, so ingress must keep recording the old generation until
+	// Drain installs the new one.
 	fingerprints map[string]string
 	quiesced     bool
 	closed       bool
@@ -146,20 +150,19 @@ func (r *router) Quiesce() <-chan struct{} {
 	return r.drained
 }
 
-// Swap atomically repoints the call path at candidate, records the
-// fingerprints of the definitions it serves, and returns the previous child
-// (nil before the first swap) for the loop to close. Calls still in flight on
-// the old child become superseded: an error completion is rewritten to a
-// friendly result, a late success passes through. Routing stays quiesced
-// until Drain.
-func (r *router) Swap(candidate ChildSession, fingerprints map[string]string) ChildSession {
+// Swap atomically repoints the call path at candidate and returns the
+// previous child (nil before the first swap) for the loop to close. Calls
+// still in flight on the old child become superseded: their completions are
+// answered with the friendly interrupted result. Routing stays quiesced — and
+// ingress keeps recording the old generation's fingerprints — until Drain
+// installs the new ones.
+func (r *router) Swap(candidate ChildSession) ChildSession {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	old := r.child
 	r.child = candidate
 	r.generation++
-	r.fingerprints = fingerprints
 	r.inflight = 0
 	if r.drained != nil {
 		close(r.drained)
@@ -178,17 +181,18 @@ func (r *router) SetFingerprints(fingerprints map[string]string) {
 	r.fingerprints = fingerprints
 }
 
-// Drain resumes direct routing and releases every buffered call, gated on
-// fingerprints: a call is forwarded to the new child only when the new
-// generation's definition for its tool is identical to the one recorded at
-// ingress. A removed or changed tool — or one whose ingress definition was
-// unknown or unfingerprintable — gets the stale-reload result instead: a
-// non-idempotent call issued against old semantics must never silently
-// execute on new code.
-func (r *router) Drain() {
+// Drain installs the new generation's fingerprints, resumes direct routing,
+// and releases every buffered call, gated on those fingerprints: a call is
+// forwarded to the new child only when the new generation's definition for
+// its tool is identical to the one recorded at ingress. A removed or changed
+// tool — or one whose ingress definition was unknown or unfingerprintable —
+// gets the stale-reload result instead: a non-idempotent call issued against
+// old semantics must never silently execute on new code.
+func (r *router) Drain(fingerprints map[string]string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.fingerprints = fingerprints
 	r.quiesced = false
 	for _, call := range r.buffer {
 		call.released = true
@@ -286,10 +290,12 @@ func (r *router) claimCancellation(call *bufferedCall) (releaseDecision, bool) {
 
 // dispatch forwards one call to child and settles the call-path bookkeeping:
 // a completion from the current generation decrements the in-flight count
-// (closing a pending quiesce drain at zero), while a completion from a
-// superseded child has its error rewritten to the friendly interrupted
-// result. A late success from a superseded child passes through — discarding
-// a completed result helps no one.
+// (closing a pending quiesce drain at zero), while any completion from a
+// superseded child — error or late success — is answered with the friendly
+// interrupted result. Calls stranded past the quiesce grace get an error
+// result (tools/proxy/DESIGN.md §4 step 3): the call may have executed on the
+// old code, and the caller is told to verify rather than handed output from a
+// definition the reload has since replaced.
 func (r *router) dispatch(
 	ctx context.Context,
 	child ChildSession,
@@ -309,8 +315,8 @@ func (r *router) dispatch(
 	}
 	r.mu.Unlock()
 
-	if err != nil && superseded {
-		r.logger.WarnContext(ctx, "tool call on superseded child failed; answering with interrupted result",
+	if superseded {
+		r.logger.WarnContext(ctx, "tool call completed on a superseded child; answering with interrupted result",
 			"tool", params.Name, "error", err)
 		return supersededResult(params.Name), nil
 	}

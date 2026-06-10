@@ -380,6 +380,25 @@ func TestFrontendStaleViewGating(t *testing.T) {
 	tc.requireForwarded(t, result)
 }
 
+func TestFrontendNeverListedSessionGatesStale(t *testing.T) {
+	t.Parallel()
+
+	tc := newTestContext(t)
+	tc.reconcile(t, namedTool("alpha"))
+	tc.awaitListChanged(t)
+
+	// A session that connects after the mutating Reconcile and never lists
+	// holds an unknown view: unknown never matches, so its calls gate stale
+	// instead of dispatching blind.
+	sessionB := tc.connectClient(t)
+	tc.requireStale(t, callTool(t, sessionB, "alpha"))
+	assert.Empty(t, tc.calls, "expected the never-listed session's call not to reach CallToolFunc")
+
+	// The session's first successful tools/list opens the gate.
+	listNames(t, sessionB)
+	tc.requireForwarded(t, callTool(t, sessionB, "alpha"))
+}
+
 func TestFrontendTombstoneAndReAdd(t *testing.T) {
 	t.Parallel()
 

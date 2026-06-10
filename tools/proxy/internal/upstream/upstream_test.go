@@ -415,19 +415,24 @@ func TestUpstreamWarnsOnUnforwardedCapabilities(t *testing.T) {
 
 // TestUpstreamDefaultTransportRunsArtifact proves the default command
 // transport through Start alone: the configured argv runs with {{artifact}}
-// substituted in every element, and the child's stderr reaches the
-// configured writer (the SDK's CommandTransport does not wire it). The
-// artifact is a scratch script that prints its command line and exits, so
-// the MCP handshake fails — the expected error; the executed command line
-// on stderr is the observable behavior. Shutdown escalation timing
-// (TerminateDuration) needs a hung child and real signals; the M4 E2E
+// substituted in every element, the child inherits the proxy's environment
+// (cmd.Env is set explicitly), and the child's stderr reaches the configured
+// writer (the SDK's CommandTransport does not wire it). The artifact is a
+// scratch script that prints its command line and one environment variable,
+// then exits, so the MCP handshake fails — the expected error; the executed
+// command line on stderr is the observable behavior. Shutdown escalation
+// timing (TerminateDuration) needs a hung child and real signals; the M4 E2E
 // tests own it.
+//
+// Not parallel: t.Setenv forbids t.Parallel.
 func TestUpstreamDefaultTransportRunsArtifact(t *testing.T) {
-	t.Parallel()
+	t.Setenv("MCP_DEVPROXY_TEST_CHILD_ENV", "inherited-ok")
 
 	artifact := filepath.Join(t.TempDir(), "child-artifact")
 	require.NoError(t,
-		os.WriteFile(artifact, []byte("#!/bin/sh\necho \"argv: $0 $*\" >&2\n"), 0o700),
+		os.WriteFile(artifact,
+			[]byte("#!/bin/sh\necho \"argv: $0 $*\" >&2\necho \"env: $MCP_DEVPROXY_TEST_CHILD_ENV\" >&2\n"),
+			0o700),
 		"write the child fixture script")
 
 	var stderr bytes.Buffer
@@ -444,6 +449,8 @@ func TestUpstreamDefaultTransportRunsArtifact(t *testing.T) {
 	// cmd.Wait), so the buffer is complete and race-free to read here.
 	assert.Contains(t, stderr.String(), "argv: "+artifact+" stdio --bin="+artifact,
 		"expected {{artifact}} substituted in every argv element and the child's stderr wired to the configured writer")
+	assert.Contains(t, stderr.String(), "env: inherited-ok",
+		"expected the child to run with the proxy's environment, explicitly inherited")
 }
 
 func TestNewValidation(t *testing.T) {

@@ -73,7 +73,12 @@ type Frontend struct {
 	tombstones map[string]uint64
 
 	// sessionGen records, per downstream session, the generation that
-	// session had observed at its most recent successful tools/list.
+	// session had observed at its most recent successful tools/list. A
+	// session absent from the map has observed generation 0: every tool
+	// touched by any mutating Reconcile gates stale for it until its first
+	// successful tools/list. The proxy cannot know what definitions such a
+	// session holds; unknown never matches, mirroring the router's drain
+	// gate.
 	sessionGen map[*mcp.ServerSession]uint64
 
 	// level is the last logging/setLevel observed from the downstream
@@ -263,6 +268,14 @@ func (f *Frontend) recordLevel(req mcp.Request) {
 // Interception must happen here rather than in a tool handler: a removed
 // tool has no handler, and the SDK would answer its raw "unknown tool"
 // protocol error instead of the friendly result the LLM can read.
+//
+// A session that has never listed has observed generation 0, so every tool
+// touched by any mutating Reconcile gates stale for it until its first
+// successful tools/list. The proxy cannot know what definitions such a
+// session holds, and unknown never matches — the same conservative direction
+// as the router's drain gate. MCP clients list before calling, so the gate
+// upgrades only a blind call from a raw dispatch to the self-correcting
+// stale-reload error.
 func (f *Frontend) gateStaleCall(ctx context.Context, req mcp.Request) *mcp.CallToolResult {
 	params, ok := req.GetParams().(*mcp.CallToolParamsRaw)
 	if !ok {

@@ -301,6 +301,12 @@ func (u *Upstream) commandTransport(artifact string) (mcp.Transport, error) {
 	//nolint:gosec,noctx // Running the developer-supplied child command is this adapter's purpose, and
 	// its lifetime belongs to CommandTransport.Close's escalation ladder, not to a ctx kill.
 	cmd := exec.Command(argv[0], argv[1:]...)
+	// The child runs with the proxy's full environment, explicitly — the same
+	// environment it would get if the developer ran it directly (the fidelity
+	// rationale behind the stderr wiring below). A nil Env would inherit the
+	// same way implicitly; the assignment makes inheritance a decision and
+	// the one obvious seam for injecting per-cycle variables later.
+	cmd.Env = os.Environ()
 	cmd.Stderr = u.stderr
 	return &mcp.CommandTransport{Command: cmd, TerminateDuration: u.terminate}, nil
 }

@@ -30,8 +30,9 @@ const (
 	// stalled reload before it is answered with an error result.
 	defaultBufferTimeout = 10 * time.Second
 
-	// defaultBackoffFloor is the first retry delay when no healthy child is
-	// serving (a failed first build, or a crash restart that fails).
+	// defaultBackoffFloor is the first retry delay when no healthy child
+	// from fresh source is serving (a failed first build, a crash restart
+	// that fails, or a child that keeps crashing after each restart).
 	defaultBackoffFloor = 250 * time.Millisecond
 
 	// defaultBackoffCeiling caps the exponential growth of the retry delay.
@@ -90,14 +91,17 @@ type Options struct {
 	// default of 10s; negative values are rejected by [New].
 	BufferTimeout time.Duration
 
-	// BackoffFloor is the first retry delay when no healthy child is
-	// serving: a failed first build, or a crashed child whose restart
-	// fails. Consecutive failures double the delay. Zero selects the
-	// default of 250ms; negative values are rejected by [New].
+	// BackoffFloor is the first delay of the exponential backoff that paces
+	// recovery restarts: a failed first build, a crashed child whose
+	// restart fails, or a child that crashes again after a restart.
+	// Consecutive failures and crash restarts double the delay. Zero
+	// selects the default of 250ms; negative values are rejected by [New].
 	BackoffFloor time.Duration
 
-	// BackoffCeiling caps the exponential retry delay. A successful swap
-	// resets the delay to the floor. Zero selects the default of 5s;
+	// BackoffCeiling caps the exponential retry delay. Only a fresh build
+	// cycle's success clears the delay; a successful build-free crash
+	// restart advances it instead, so a crash-looping child is paced even
+	// when every restart health-gates. Zero selects the default of 5s;
 	// negative values are rejected by [New].
 	BackoffCeiling time.Duration
 }

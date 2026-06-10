@@ -332,30 +332,62 @@ func TestRunCrashRestartsWithBackoff(t *testing.T) {
 	tc := newRunContext(t)
 	childA := tc.coldStart(t, toolSet("search", "v1"))
 
-	// No Build is armed past the cold start: the crash restart must reuse
-	// the last good artifact. The first attempt is immediate — no timer —
-	// and it plus the first backoff retry fail before the second retry
+	// No Build is armed until the final fresh save: every crash restart must
+	// reuse the last good artifact. The first attempt is immediate — no timer
+	// — and it plus the first backoff retry fail before the doubled retry
 	// succeeds.
 	tc.upstream.EXPECT().Start(mock.Anything, coldStartArtifact).Return(nil, errors.New("spawn failed")).Twice()
 	toolsV2 := toolSet("search", "v2")
 	childB := tc.newChild(t, toolsV2)
 	tc.expectStart(coldStartArtifact, childB)
-	reconciled := tc.expectReconcile(toolsV2, nil)
+	reconciledB := tc.expectReconcile(toolsV2, nil)
 	childA.expectClose()
-	childB.expectClose()
 
 	childA.crash()                                   // the immediate restart attempt fails
 	tc.clock.awaitTimer(t, runBackoffFloor).fire()   // first retry, at the floor, fails
 	tc.clock.awaitTimer(t, 2*runBackoffFloor).fire() // doubled retry succeeds
 
-	awaitSignal(t, reconciled, "timed out waiting for the restarted child to reconcile")
+	awaitSignal(t, reconciledB, "timed out waiting for the restarted child to reconcile")
 	tc.assertServedBy(t, childB, "search")
 
-	// A later crash restarts immediately again and, when that attempt fails,
-	// backs off from the floor: the successful swap reset the backoff.
-	tc.upstream.EXPECT().Start(mock.Anything, coldStartArtifact).Return(nil, errors.New("spawn failed")).Once()
+	// childB came from a build-free restart, so its success advanced the
+	// backoff instead of clearing it: when childB itself crashes — the classic
+	// crash loop, where every restart health-gates before dying — the next
+	// restart is scheduled at the doubled delay, never run immediately. No
+	// immediate Start is armed: one would fail the test as an unexpected call.
 	childB.crash()
-	tc.clock.awaitTimer(t, runBackoffFloor)
+	retry := tc.clock.awaitTimer(t, 4*runBackoffFloor)
+
+	toolsV3 := toolSet("search", "v3")
+	childC := tc.newChild(t, toolsV3)
+	tc.expectStart(coldStartArtifact, childC)
+	reconciledC := tc.expectReconcile(toolsV3, nil)
+	childB.expectClose()
+	retry.fire()
+	awaitSignal(t, reconciledC, "timed out waiting for the backed-off crash restart to reconcile")
+
+	// A fresh debounced build clears the backoff: the developer changed the
+	// code, which is the only thing that can fix a crash loop.
+	toolsV4 := toolSet("search", "v4")
+	childD := tc.newChild(t, toolsV4)
+	tc.expectBuild("art2")
+	tc.expectStart("art2", childD)
+	reconciledD := tc.expectReconcile(toolsV4, nil)
+	childC.expectClose()
+	tc.triggerChangeAndDebounce(t)
+	awaitSignal(t, reconciledD, "timed out waiting for the fresh build to reconcile")
+
+	// With the backoff cleared, the next crash restarts immediately again.
+	toolsV5 := toolSet("search", "v5")
+	childE := tc.newChild(t, toolsV5)
+	started := tc.expectStartSignaled("art2", childE)
+	reconciledE := tc.expectReconcile(toolsV5, nil)
+	childD.expectClose()
+	childE.expectClose()
+	childD.crash()
+	awaitSignal(t, started, "timed out waiting for the immediate restart after a fresh build")
+	awaitSignal(t, reconciledE, "timed out waiting for the post-reset crash restart to reconcile")
+	tc.assertServedBy(t, childE, "search")
 }
 
 func TestRunDebouncedCycleDropsPendingRetry(t *testing.T) {

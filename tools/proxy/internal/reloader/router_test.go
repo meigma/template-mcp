@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,6 +77,88 @@ func TestRouterCallContextCancellation(t *testing.T) {
 	res := awaitResult(t, results)
 	require.ErrorIs(t, res.err, context.Canceled, "expected caller cancellation to propagate to the child call")
 	assert.Nil(t, res.result)
+}
+
+func TestRouterBufferedCallCancellation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns the cancellation and never dispatches the parked call", func(t *testing.T) {
+		t.Parallel()
+
+		const tool = "search"
+		fingerprints := map[string]string{tool: "fp-1"}
+		tc := newRouterContext(t)
+		tc.serveChild(NewMockChildSession(t), fingerprints)
+		tc.router.Quiesce()
+
+		ctx, cancel := context.WithCancel(t.Context())
+		results := tc.startCall(ctx, callParams(tool))
+		tc.clock.awaitTimer(t, testBufferTimeout) // the call is parked
+
+		cancel()
+
+		res := awaitResult(t, results)
+		require.ErrorIs(t, res.err, context.Canceled,
+			"expected caller cancellation to resolve the parked call with the context error")
+		assert.Nil(t, res.result)
+
+		// The cancellation claimed the call out of the buffer: the drain must
+		// not deliver it to the new child, whose mock would fail the test on
+		// any unexpected CallTool.
+		tc.router.Swap(NewMockChildSession(t))
+		tc.router.Drain(fingerprints)
+	})
+
+	t.Run("resolves a cancel-versus-drain race exactly once", func(t *testing.T) {
+		t.Parallel()
+
+		// bufferedCall documents an exactly-once race: whichever of Drain or
+		// caller cancellation claims a parked call first decides it. Racing
+		// the two must always yield exactly one of the two outcomes — and a
+		// drain decision that wins must be honored, because Drain already
+		// charged the call against the in-flight count: abandoning it would
+		// leak the charge and hang the post-drain quiesce forever.
+		const tool = "search"
+		fingerprints := map[string]string{tool: "fp-1"}
+		tc := newRouterContext(t)
+		tc.serveChild(NewMockChildSession(t), fingerprints)
+
+		child := NewMockChildSession(t)
+		want := textResult("served by the new child")
+		child.EXPECT().CallTool(mock.Anything, mock.Anything).Return(want, nil).Maybe()
+
+		for range 100 {
+			tc.router.Quiesce()
+			ctx, cancel := context.WithCancel(t.Context())
+			results := tc.startCall(ctx, callParams(tool))
+			tc.clock.awaitTimer(t, testBufferTimeout) // the call is parked
+
+			var race sync.WaitGroup
+			race.Add(2)
+			go func() {
+				defer race.Done()
+				cancel()
+			}()
+			go func() {
+				defer race.Done()
+				tc.router.Swap(child)
+				tc.router.Drain(fingerprints)
+			}()
+			race.Wait()
+
+			res := awaitResult(t, results)
+			if res.err != nil {
+				require.ErrorIs(t, res.err, context.Canceled,
+					"expected a cancellation-claimed call to fail with the context error")
+				assert.Nil(t, res.result)
+			} else {
+				assert.Same(t, want, res.result,
+					"expected a drain-claimed call dispatched to the new child")
+			}
+			awaitSignal(t, tc.router.Quiesce(),
+				"timed out waiting for quiesce to drain: the race leaked an in-flight charge")
+		}
+	})
 }
 
 func TestRouterDrainGating(t *testing.T) {

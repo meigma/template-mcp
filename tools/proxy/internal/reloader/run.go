@@ -178,6 +178,10 @@ type runLoop struct {
 	// cycleCancel is non-nil exactly while a cycle goroutine is in flight.
 	cycleCancel  context.CancelFunc
 	cycleResults chan cycleResult
+	// cycleFresh records whether the in-flight cycle runs a full build of
+	// fresh source (as opposed to a build-free restart of an old artifact);
+	// onCycleResult uses it to decide whether success clears the backoff.
+	cycleFresh bool
 	// rerun marks a cancelled-and-superseded cycle: its result triggers
 	// exactly one fresh cycle.
 	rerun bool
@@ -187,8 +191,12 @@ type runLoop struct {
 	// retryArtifact is what a backoff retry starts: empty means a full
 	// build, otherwise the last good artifact is restarted build-free.
 	retryArtifact string
-	backoff       time.Duration
-	lastArtifact  string
+	// backoff is the current exponential restart delay. It advances on every
+	// cycle failure with no healthy child and on every build-free restart's
+	// success, and clears only when a fresh build cycle succeeds — so a
+	// crash-looping child is paced even when each restart health-gates.
+	backoff      time.Duration
+	lastArtifact string
 }
 
 // run is the select loop. Every Close of every child happens here (or in
@@ -275,6 +283,10 @@ func (l *runLoop) onDebounce(ctx context.Context) {
 // or schedule a backoff retry when no healthy child serves, and successes
 // swap. A non-nil return means shutdown interrupted the swap.
 func (l *runLoop) onCycleResult(ctx context.Context, res cycleResult) error {
+	// The cycle goroutine already sent its result, so cancelling is
+	// side-effect-free — but skipping it would leak the cancel context into
+	// the parent ctx's children for the life of Run, one node per cycle.
+	l.cycleCancel()
 	l.cycleCancel = nil
 	l.cycleResults = nil
 
@@ -304,7 +316,15 @@ func (l *runLoop) onCycleResult(ctx context.Context, res cycleResult) error {
 	l.currentTools = res.child.ToolsChanged()
 	l.currentDead = false
 	l.lastArtifact = res.artifact
-	l.backoff = 0
+	// Only a fresh build clears the backoff. A successful build-free restart
+	// advances it instead: a crash-looping child "succeeds" every restart, and
+	// resetting here would respawn it in a tight loop forever (the §5 failure
+	// row "auto-restart with backoff" exists to bound exactly that).
+	if l.cycleFresh {
+		l.backoff = 0
+	} else {
+		l.backoff = l.r.nextBackoff(l.backoff)
+	}
 	l.r.logger.InfoContext(ctx, "serving the new child", "state", "SERVING", "artifact", res.artifact)
 	return nil
 }
@@ -332,9 +352,11 @@ func (l *runLoop) onCycleFailure(ctx context.Context, cycleErr error) {
 // onChildDied handles the serving child's Done firing. Mid-cycle it is noted
 // and otherwise ignored — the cycle already replaces the child. In SERVING it
 // quiesces the router so restart-window calls buffer instead of erroring on a
-// dead transport, then starts an immediate build-free restart of the last
-// artifact: the first attempt waits for nothing, and exponential backoff
-// applies only to consecutive failures via onCycleFailure.
+// dead transport, then restarts the last artifact build-free: immediately when
+// the backoff is clear (the child came from a fresh build), otherwise after
+// the current backoff delay. Every build-free restart advances the backoff
+// (onCycleResult) whether or not it health-gates, so consecutive crashes are
+// paced exponentially until a fresh build resets the delay.
 func (l *runLoop) onChildDied(ctx context.Context) {
 	l.currentDone = nil
 	l.currentDead = true
@@ -343,6 +365,13 @@ func (l *runLoop) onChildDied(ctx context.Context) {
 		return
 	}
 	l.r.router.Quiesce()
+	if l.backoff > 0 {
+		l.retryArtifact = l.lastArtifact
+		l.retryCh = l.r.clock.After(l.backoff)
+		l.r.logger.ErrorContext(ctx, "child died while serving: restart scheduled with backoff",
+			"backoff", l.backoff, "artifact", l.lastArtifact)
+		return
+	}
 	l.r.logger.ErrorContext(ctx, "child died while serving: restarting immediately",
 		"state", "STARTING", "artifact", l.lastArtifact)
 	l.startCycle(ctx, l.lastArtifact)
@@ -383,6 +412,7 @@ func (l *runLoop) startCycle(ctx context.Context, artifact string) {
 	cycleCtx, cancel := context.WithCancel(ctx)
 	l.cycleCancel = cancel
 	l.cycleResults = make(chan cycleResult, 1)
+	l.cycleFresh = artifact == ""
 	go l.r.runCycle(cycleCtx, artifact, l.cycleResults)
 }
 

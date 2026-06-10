@@ -46,9 +46,22 @@ type config struct {
 // template's zero-config defaults to whatever is still empty, and validates
 // the result.
 func resolveConfig(vp *viper.Viper, args []string, argsLenAtDash int, logger *slog.Logger) (config, error) {
-	if len(args) > 0 && argsLenAtDash != 0 {
+	// Cobra reports argsLenAtDash as the count of positional args before
+	// "--", or -1 when no "--" was given. Each misuse gets its own message:
+	// args before the separator, positional args with no separator at all,
+	// and an explicit separator with nothing after it — a user who typed
+	// "--" signalled a child command, so silently substituting the template
+	// default would ignore their intent.
+	switch {
+	case argsLenAtDash > 0:
+		return config{}, fmt.Errorf(
+			`no arguments are allowed before "--" (usage: %s [flags] -- <child argv>)`, appName)
+	case argsLenAtDash < 0 && len(args) > 0:
 		return config{}, fmt.Errorf(
 			`child command must follow "--" (usage: %s [flags] -- <child argv>)`, appName)
+	case argsLenAtDash == 0 && len(args) == 0:
+		return config{}, fmt.Errorf(
+			`a child command is required after "--" (usage: %s [flags] -- <child argv>)`, appName)
 	}
 
 	cfg := config{

@@ -195,7 +195,17 @@ func TestRootCommandValidationErrors(t *testing.T) {
 		{
 			name:    "stray args before the dash separator",
 			args:    []string{"stray", "--", "{{artifact}}", "stdio"},
-			wantErr: `must follow "--"`,
+			wantErr: `no arguments are allowed before "--"`,
+		},
+		{
+			name:    "dash separator with no child command",
+			args:    []string{"--"},
+			wantErr: `child command is required after "--"`,
+		},
+		{
+			name:    "dash separator with no child command alongside flags",
+			args:    []string{"--build", "make {{artifact}}", "--watch", ".", "--"},
+			wantErr: `child command is required after "--"`,
 		},
 		{
 			name:    "child argv without the artifact token",

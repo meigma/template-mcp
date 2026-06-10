@@ -3,6 +3,7 @@ package reloader
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -13,6 +14,14 @@ import (
 // dev-loop numbers (design §10.7 defers tuning); the CLI exposes flags for
 // them in a later milestone.
 const (
+	// defaultDebounce is how long source-change events are coalesced before
+	// a reload cycle starts.
+	defaultDebounce = 300 * time.Millisecond
+
+	// defaultQuiesceGrace bounds a swap's wait for calls in flight on the
+	// old child to drain.
+	defaultQuiesceGrace = 5 * time.Second
+
 	// defaultBufferLimit bounds the swap buffer: calls beyond it are
 	// answered with an error result instead of queueing without bound.
 	defaultBufferLimit = 32
@@ -20,6 +29,16 @@ const (
 	// defaultBufferTimeout bounds how long one buffered call waits for a
 	// stalled reload before it is answered with an error result.
 	defaultBufferTimeout = 10 * time.Second
+
+	// defaultBackoffFloor is the first retry delay when no healthy child is
+	// serving (a failed first build, or a crash restart that fails).
+	defaultBackoffFloor = 250 * time.Millisecond
+
+	// defaultBackoffCeiling caps the exponential growth of the retry delay.
+	defaultBackoffCeiling = 5 * time.Second
+
+	// backoffFactor doubles the retry delay after each consecutive failure.
+	backoffFactor = 2
 )
 
 // Options configures a Reloader for [New].
@@ -47,6 +66,18 @@ type Options struct {
 	// Clock supplies debounce and backoff timers. Nil selects real time.
 	Clock Clock
 
+	// Debounce is how long the core waits after a source-change event
+	// before starting a reload cycle; every fresh event restarts the wait,
+	// coalescing save bursts into one rebuild. Zero selects the default of
+	// 300ms; negative values are rejected by [New].
+	Debounce time.Duration
+
+	// QuiesceGrace bounds how long a swap waits for calls in flight on the
+	// old child to finish before proceeding anyway; calls still running
+	// past it are superseded and answered with an error result. Zero
+	// selects the default of 5s; negative values are rejected by [New].
+	QuiesceGrace time.Duration
+
 	// BufferLimit caps how many tool calls may wait in the swap buffer
 	// while routing is quiesced (mid-swap or during a crash-restart
 	// window). Excess calls receive an error result immediately, so the
@@ -58,20 +89,36 @@ type Options struct {
 	// swap to finish before receiving an error result. Zero selects the
 	// default of 10s; negative values are rejected by [New].
 	BufferTimeout time.Duration
+
+	// BackoffFloor is the first retry delay when no healthy child is
+	// serving: a failed first build, or a crashed child whose restart
+	// fails. Consecutive failures double the delay. Zero selects the
+	// default of 250ms; negative values are rejected by [New].
+	BackoffFloor time.Duration
+
+	// BackoffCeiling caps the exponential retry delay. A successful swap
+	// resets the delay to the floor. Zero selects the default of 5s;
+	// negative values are rejected by [New].
+	BackoffCeiling time.Duration
 }
 
 // Reloader is the dev proxy's core orchestrator.
 //
 // It owns the watch, debounce, build, health-gate, swap cycle that keeps a
 // persistent downstream MCP session pointed at a disposable child server.
-// This skeleton carries construction and wiring only; the orchestration loop
-// lands in a later milestone.
+// Construct it with [New], wire the client-facing side with
+// [Reloader.SetFrontend], then drive it with [Reloader.Run].
 type Reloader struct {
 	watcher  Watcher
 	builder  Builder
 	upstream Upstream
 	logger   *slog.Logger
 	clock    Clock
+
+	debounce       time.Duration
+	quiesceGrace   time.Duration
+	backoffFloor   time.Duration
+	backoffCeiling time.Duration
 
 	frontend Frontend
 	router   *router
@@ -96,8 +143,16 @@ func New(options Options) (*Reloader, error) {
 	if options.BufferLimit < 0 {
 		return nil, errors.New("buffer limit must not be negative")
 	}
-	if options.BufferTimeout < 0 {
-		return nil, errors.New("buffer timeout must not be negative")
+	for name, value := range map[string]time.Duration{
+		"debounce":        options.Debounce,
+		"quiesce grace":   options.QuiesceGrace,
+		"buffer timeout":  options.BufferTimeout,
+		"backoff floor":   options.BackoffFloor,
+		"backoff ceiling": options.BackoffCeiling,
+	} {
+		if value < 0 {
+			return nil, fmt.Errorf("%s must not be negative", name)
+		}
 	}
 
 	logger := options.Logger
@@ -112,18 +167,23 @@ func New(options Options) (*Reloader, error) {
 	if bufferLimit == 0 {
 		bufferLimit = defaultBufferLimit
 	}
-	bufferTimeout := options.BufferTimeout
-	if bufferTimeout == 0 {
-		bufferTimeout = defaultBufferTimeout
-	}
 
 	return &Reloader{
-		watcher:  options.Watcher,
-		builder:  options.Builder,
-		upstream: options.Upstream,
-		logger:   logger,
-		clock:    clock,
-		router:   newRouter(logger, clock, bufferLimit, bufferTimeout),
+		watcher:        options.Watcher,
+		builder:        options.Builder,
+		upstream:       options.Upstream,
+		logger:         logger,
+		clock:          clock,
+		debounce:       defaultDuration(options.Debounce, defaultDebounce),
+		quiesceGrace:   defaultDuration(options.QuiesceGrace, defaultQuiesceGrace),
+		backoffFloor:   defaultDuration(options.BackoffFloor, defaultBackoffFloor),
+		backoffCeiling: defaultDuration(options.BackoffCeiling, defaultBackoffCeiling),
+		router: newRouter(
+			logger,
+			clock,
+			bufferLimit,
+			defaultDuration(options.BufferTimeout, defaultBufferTimeout),
+		),
 	}, nil
 }
 
@@ -148,4 +208,12 @@ func (r *Reloader) CallTool(ctx context.Context, params *mcp.CallToolParams) (*m
 // back here. The Frontend never needs the core type, only the CallToolFunc.
 func (r *Reloader) SetFrontend(frontend Frontend) {
 	r.frontend = frontend
+}
+
+// defaultDuration substitutes def for an unset (zero) duration knob.
+func defaultDuration(value, def time.Duration) time.Duration {
+	if value == 0 {
+		return def
+	}
+	return value
 }

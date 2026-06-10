@@ -9,10 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Caller-provided buffer knob values for TestNew, distinct from the defaults.
+// Caller-provided knob values for TestNew, distinct from the defaults.
 const (
-	customBufferLimit   = 7
-	customBufferTimeout = 3 * time.Second
+	customBufferLimit    = 7
+	customBufferTimeout  = 3 * time.Second
+	customDebounce       = 100 * time.Millisecond
+	customQuiesceGrace   = 2 * time.Second
+	customBackoffFloor   = 50 * time.Millisecond
+	customBackoffCeiling = time.Second
 )
 
 func TestNew(t *testing.T) {
@@ -75,6 +79,46 @@ func TestNew(t *testing.T) {
 			wantErr: "buffer timeout must not be negative",
 		},
 		{
+			name: "errors when Debounce is negative",
+			options: func(t *testing.T) Options {
+				t.Helper()
+				opts := validOptions(t)
+				opts.Debounce = -time.Second
+				return opts
+			},
+			wantErr: "debounce must not be negative",
+		},
+		{
+			name: "errors when QuiesceGrace is negative",
+			options: func(t *testing.T) Options {
+				t.Helper()
+				opts := validOptions(t)
+				opts.QuiesceGrace = -time.Second
+				return opts
+			},
+			wantErr: "quiesce grace must not be negative",
+		},
+		{
+			name: "errors when BackoffFloor is negative",
+			options: func(t *testing.T) Options {
+				t.Helper()
+				opts := validOptions(t)
+				opts.BackoffFloor = -time.Second
+				return opts
+			},
+			wantErr: "backoff floor must not be negative",
+		},
+		{
+			name: "errors when BackoffCeiling is negative",
+			options: func(t *testing.T) Options {
+				t.Helper()
+				opts := validOptions(t)
+				opts.BackoffCeiling = -time.Second
+				return opts
+			},
+			wantErr: "backoff ceiling must not be negative",
+		},
+		{
 			name:    "defaults nil Logger to a no-op logger and nil Clock to real time",
 			options: validOptions,
 			assertReloader: func(t *testing.T, _ Options, got *Reloader) {
@@ -84,22 +128,30 @@ func TestNew(t *testing.T) {
 			},
 		},
 		{
-			name:    "defaults zero buffer knobs",
+			name:    "defaults zero timing and sizing knobs",
 			options: validOptions,
 			assertReloader: func(t *testing.T, _ Options, got *Reloader) {
 				t.Helper()
 				require.NotNil(t, got.router, "expected the call router wired at construction")
 				assert.Equal(t, defaultBufferLimit, got.router.bufferLimit, "expected the default buffer limit")
 				assert.Equal(t, defaultBufferTimeout, got.router.bufferTimeout, "expected the default buffer timeout")
+				assert.Equal(t, defaultDebounce, got.debounce, "expected the default debounce")
+				assert.Equal(t, defaultQuiesceGrace, got.quiesceGrace, "expected the default quiesce grace")
+				assert.Equal(t, defaultBackoffFloor, got.backoffFloor, "expected the default backoff floor")
+				assert.Equal(t, defaultBackoffCeiling, got.backoffCeiling, "expected the default backoff ceiling")
 			},
 		},
 		{
-			name: "keeps caller-provided buffer knobs",
+			name: "keeps caller-provided timing and sizing knobs",
 			options: func(t *testing.T) Options {
 				t.Helper()
 				opts := validOptions(t)
 				opts.BufferLimit = customBufferLimit
 				opts.BufferTimeout = customBufferTimeout
+				opts.Debounce = customDebounce
+				opts.QuiesceGrace = customQuiesceGrace
+				opts.BackoffFloor = customBackoffFloor
+				opts.BackoffCeiling = customBackoffCeiling
 				return opts
 			},
 			assertReloader: func(t *testing.T, _ Options, got *Reloader) {
@@ -116,6 +168,14 @@ func TestNew(t *testing.T) {
 					got.router.bufferTimeout,
 					"expected the caller-provided buffer timeout kept",
 				)
+				assert.Equal(t, customDebounce, got.debounce,
+					"expected the caller-provided debounce kept")
+				assert.Equal(t, customQuiesceGrace, got.quiesceGrace,
+					"expected the caller-provided quiesce grace kept")
+				assert.Equal(t, customBackoffFloor, got.backoffFloor,
+					"expected the caller-provided backoff floor kept")
+				assert.Equal(t, customBackoffCeiling, got.backoffCeiling,
+					"expected the caller-provided backoff ceiling kept")
 			},
 		},
 		{

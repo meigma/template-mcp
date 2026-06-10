@@ -47,8 +47,6 @@ func (c *fakeClock) After(d time.Duration) <-chan time.Time {
 // awaitTimer blocks until production code has created an unclaimed timer with
 // duration d, claims it, and returns it. Claiming means successive awaits for
 // the same duration observe distinct timers.
-//
-//nolint:unparam // Shared harness: orchestrator tests await debounce, grace, and backoff durations too.
 func (c *fakeClock) awaitTimer(t *testing.T, d time.Duration) *fakeTimer {
 	t.Helper()
 
@@ -77,6 +75,22 @@ func (c *fakeClock) awaitTimer(t *testing.T, d time.Duration) *fakeTimer {
 			t.Fatalf("timed out waiting for a %v timer to be created", d)
 		}
 	}
+}
+
+// timerCount reports how many timers with duration d have been created so
+// far, claimed or not. Orchestrator tests use it to assert that no retry was
+// scheduled (no backoff-duration timer exists).
+func (c *fakeClock) timerCount(d time.Duration) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	count := 0
+	for _, timer := range c.timers {
+		if timer.d == d {
+			count++
+		}
+	}
+	return count
 }
 
 // fire delivers the timer's tick.

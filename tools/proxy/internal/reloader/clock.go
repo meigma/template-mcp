@@ -6,8 +6,8 @@ import "time"
 // as an injectable seam so the orchestration logic is testable without real
 // sleeps.
 //
-// It is intentionally minimal; the orchestration milestone (M2) may extend
-// it (for example with stoppable timers) as the reload loop's needs firm up.
+// It is intentionally minimal and may grow (for example with stoppable
+// timers) as the reload loop's needs firm up.
 type Clock interface {
 	// After returns a channel that delivers the current time once d has
 	// elapsed.

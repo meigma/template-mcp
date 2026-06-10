@@ -22,6 +22,7 @@ fileGroups:
     - '/.golangci.yml'
     - '/.prototools'
     - '/.moon/proto/golangci-lint.toml'
+  mockConfig:
     - '.mockery.yaml'
 
 workspace:
@@ -67,6 +68,7 @@ tasks:
     toolchains: ['go']
     inputs:
       - '@group(goSources)'
+      - '@group(mockConfig)'
     options:
       cache: false
 
@@ -79,6 +81,7 @@ tasks:
     inputs:
       - '@group(goSources)'
       - '@group(lintConfig)'
+      - '@group(mockConfig)'
     options:
       cache: false
       runInCI: true

@@ -124,7 +124,9 @@ broadly useful.
 Nested-module wiring (decided, not open): add `proxy: 'tools/proxy'` to
 `.moon/workspace.yml` projects, give the proxy its own `moon.yml` with
 format/lint/build/test tasks (run from `tools/proxy`, reusing the root
-`.golangci.yml` with the module-path-appropriate local-prefix override), and
+`.golangci.yml`; no local-prefix override is needed — goimports matches local
+prefixes by string prefix, so the root module prefix already covers the
+nested module path), and
 add `proxy:check`-equivalent deps to `root:check` so CI covers it. The
 nested module also carries its own `.mockery.yaml` (the root module has no
 mockery setup today).

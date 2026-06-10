@@ -302,6 +302,11 @@ func TestNewProxyConstruction(t *testing.T) {
 			mutate:  func(cfg *config) { cfg.quiesce = -time.Millisecond },
 			wantErr: "quiesce grace must not be negative",
 		},
+		{
+			name:    "negative terminate surfaces from the upstream adapter",
+			mutate:  func(cfg *config) { cfg.terminate = -time.Millisecond },
+			wantErr: "terminate duration must not be negative",
+		},
 	}
 
 	for _, tt := range tests {

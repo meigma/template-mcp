@@ -3,6 +3,7 @@ package upstream_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,10 +37,17 @@ type logRecorder struct {
 
 func (r *logRecorder) Enabled(context.Context, slog.Level) bool { return true }
 
+// Handle records the message with its attrs folded in as key=value pairs, so
+// assertions can match attribute values (such as the fidelity-gap method).
 func (r *logRecorder) Handle(_ context.Context, record slog.Record) error {
+	message := record.Message
+	record.Attrs(func(attr slog.Attr) bool {
+		message += " " + attr.String()
+		return true
+	})
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.messages = append(r.messages, record.Message)
+	r.messages = append(r.messages, message)
 	return nil
 }
 
@@ -62,11 +71,16 @@ func (r *logRecorder) contains(substr string) bool {
 type fakeChild struct {
 	server  *mcp.Server
 	session atomic.Pointer[mcp.ServerSession]
+
+	// conns captures the child's raw side of the wire at connect, letting
+	// tests inject protocol messages the SDK's server API refuses to send.
+	conns chan mcp.Connection
 }
 
 func newFakeChild(toolNames ...string) *fakeChild {
 	child := &fakeChild{
 		server: mcp.NewServer(&mcp.Implementation{Name: "fake-child", Version: "0.0.1"}, nil),
+		conns:  make(chan mcp.Connection, 1),
 	}
 	for _, name := range toolNames {
 		child.addTool(name)
@@ -90,12 +104,47 @@ func (c *fakeChild) addTool(name string) {
 func (c *fakeChild) factory(t *testing.T) upstream.TransportFactory {
 	return func(string) (mcp.Transport, error) {
 		serverTransport, clientTransport := mcp.NewInMemoryTransports()
-		session, err := c.server.Connect(t.Context(), serverTransport, nil)
+		tapped := &tappingTransport{transport: serverTransport, conns: c.conns}
+		session, err := c.server.Connect(t.Context(), tapped, nil)
 		if err != nil {
 			return nil, err
 		}
 		c.session.Store(session)
 		return clientTransport, nil
+	}
+}
+
+// tappingTransport hands the wrapped transport's Connection through untouched
+// while keeping a reference for the test.
+type tappingTransport struct {
+	transport mcp.Transport
+	conns     chan<- mcp.Connection
+}
+
+func (t *tappingTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	conn, err := t.transport.Connect(ctx)
+	if err == nil {
+		select {
+		case t.conns <- conn:
+		default:
+		}
+	}
+	return conn, err
+}
+
+// rawConnection returns the fake child's side of the wire captured at
+// connect. [mcp.Connection.Write] is documented as safe to call concurrently,
+// so injecting a message races neither the child server's own writes nor its
+// read loop.
+func (c *fakeChild) rawConnection(t *testing.T) mcp.Connection {
+	t.Helper()
+
+	select {
+	case conn := <-c.conns:
+		return conn
+	default:
+		t.Fatal("expected the transport factory to have captured the child's connection")
+		return nil
 	}
 }
 
@@ -369,6 +418,55 @@ func TestUpstreamRootsListRejected(t *testing.T) {
 	assert.True(t, tc.logs.contains("roots/list"), "expected a loud log about the roots fidelity gap")
 }
 
+// TestUpstreamSamplingRejectedLoudly covers the sampling half of the §5
+// fidelity-gap row: the proxy configures no sampling handler, so the child's
+// sampling/createMessage gets an error back — and the gap must be loud on the
+// proxy's logs, never silent.
+func TestUpstreamSamplingRejectedLoudly(t *testing.T) {
+	t.Parallel()
+
+	child := newFakeChild("alpha")
+	tc := newTestContext(t, child, upstream.Options{})
+	tc.start(t)
+
+	_, err := child.serverSession(t).CreateMessage(t.Context(), &mcp.CreateMessageParams{})
+
+	require.Error(t, err, "expected sampling to fail: the proxy configures no sampling handler")
+	require.ErrorContains(t, err, "does not support", "expected the unsupported-feature error to reach the child")
+	assert.True(t, tc.logs.contains("sampling/createMessage"),
+		"expected a loud log naming the sampling fidelity gap")
+}
+
+// TestUpstreamElicitationRejectedLoudly covers the elicitation half of the §5
+// fidelity-gap row. A well-behaved go-sdk child cannot even issue the request:
+// ServerSession.Elicit refuses locally because the proxy advertises no
+// elicitation capability. The loud-log contract is about the wire, so the
+// request is injected raw on the child's connection — exactly what a non-SDK
+// or ill-behaved child would send.
+func TestUpstreamElicitationRejectedLoudly(t *testing.T) {
+	t.Parallel()
+
+	child := newFakeChild("alpha")
+	tc := newTestContext(t, child, upstream.Options{})
+	session := tc.start(t)
+
+	id, err := jsonrpc.MakeID("fidelity-gap-elicit")
+	require.NoError(t, err, "make the injected request id")
+	require.NoError(t, child.rawConnection(t).Write(t.Context(), &jsonrpc.Request{
+		ID:     id,
+		Method: "elicitation/create",
+		Params: json.RawMessage(`{"message":"pick one","requestedSchema":{"type":"object"}}`),
+	}), "inject the raw elicitation request from the child's side of the wire")
+
+	require.Eventually(t, func() bool { return tc.logs.contains("elicitation/create") },
+		waitTimeout, tick, "expected a loud log naming the elicitation fidelity gap")
+
+	// The error response to the injected request must not damage the session:
+	// the child keeps serving tool calls afterwards.
+	_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "alpha"})
+	assert.NoError(t, err, "expected the session to survive the rejected elicitation")
+}
+
 func TestUpstreamLoggingPassthrough(t *testing.T) {
 	t.Parallel()
 
@@ -421,8 +519,8 @@ func TestUpstreamWarnsOnUnforwardedCapabilities(t *testing.T) {
 // scratch script that prints its command line and one environment variable,
 // then exits, so the MCP handshake fails — the expected error; the executed
 // command line on stderr is the observable behavior. Shutdown escalation
-// timing (TerminateDuration) needs a hung child and real signals; the M4 E2E
-// tests own it.
+// timing (TerminateDuration) needs a hung child and real signals; the E2E
+// suite's TestE2EHungChildEscalation owns it.
 //
 // Not parallel: t.Setenv forbids t.Parallel.
 func TestUpstreamDefaultTransportRunsArtifact(t *testing.T) {
@@ -467,4 +565,11 @@ func TestNewValidation(t *testing.T) {
 		return transport, nil
 	}})
 	require.NoError(t, err, "expected a transport factory alone to satisfy New")
+
+	_, err = upstream.New(upstream.Options{
+		Argv:              []string{"./child", "stdio"},
+		TerminateDuration: -time.Second,
+	})
+	require.ErrorContains(t, err, "terminate duration must not be negative",
+		"expected New to reject a negative terminate duration instead of passing it to the transport")
 }

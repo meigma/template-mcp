@@ -62,7 +62,7 @@ type Options struct {
 
 	// TerminateDuration is how long the default transport's Close waits at
 	// each shutdown escalation step (stdin close, SIGTERM, SIGKILL). Zero
-	// selects a dev-loop-short 1s.
+	// selects a dev-loop-short 1s; negative is rejected by New.
 	TerminateDuration time.Duration
 
 	// HealthTimeout bounds the health gate's tool listing and the re-list
@@ -109,12 +109,17 @@ type Upstream struct {
 // New constructs an Upstream from options.
 //
 // New fails when neither Argv nor Transport is set — without one of them
-// there is no way to reach a child. Unset options select dev-loop defaults:
-// a 1s TerminateDuration, a 5s HealthTimeout, the proxy's own [os.Stderr]
-// for child stderr, the CommandTransport factory, and a no-op logger.
+// there is no way to reach a child — and when TerminateDuration is negative,
+// which would be handed untouched to the transport's shutdown escalation.
+// Unset options select dev-loop defaults: a 1s TerminateDuration, a 5s
+// HealthTimeout, the proxy's own [os.Stderr] for child stderr, the
+// CommandTransport factory, and a no-op logger.
 func New(options Options) (*Upstream, error) {
 	if options.Transport == nil && len(options.Argv) == 0 {
 		return nil, errors.New("a child argv template is required when no transport factory is set")
+	}
+	if options.TerminateDuration < 0 {
+		return nil, errors.New("terminate duration must not be negative")
 	}
 
 	upstream := &Upstream{

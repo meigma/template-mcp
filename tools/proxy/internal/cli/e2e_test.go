@@ -1,11 +1,12 @@
-// E2E: one Short-guarded test driving the production exec and fsnotify
+// E2E: two Short-guarded tests driving the production exec and fsnotify
 // adapters end to end — a real go build through the build adapter, real child
-// processes via CommandTransport, a real fsnotify watch. It exists to prove
-// those adapters, not the orchestration logic (DESIGN §9); reconciliation,
-// stale gating, and logging passthrough are covered in-process by the
-// integration suite. Only the downstream transport is injected: the fake
-// Claude client needs an in-memory pair, exactly as a future HTTP downstream
-// would slot into the same seam.
+// processes via CommandTransport, a real fsnotify watch. They exist to prove
+// those adapters (the reload loop and the shutdown escalation ladder), not
+// the orchestration logic (DESIGN §9); reconciliation, stale gating, and
+// logging passthrough are covered in-process by the integration suite. Only
+// the downstream transport is injected: the fake Claude client needs an
+// in-memory pair, exactly as a future HTTP downstream would slot into the
+// same seam.
 //
 // unix-only: the no-orphans assertions probe processes with kill(pid, 0).
 
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,6 +100,59 @@ func TestE2EReloadLoop(t *testing.T) {
 	for _, pid := range readPids(t, pidFile) {
 		requireProcessGone(t, pid)
 	}
+}
+
+// TestE2EHungChildEscalation proves the §5 failure row "old child hangs on
+// Close" over the real CommandTransport: a child that survives stdin close
+// and ignores SIGTERM must be SIGKILLed after --terminate per escalation
+// step instead of stalling the proxy (shutdown here; a swap closes the old
+// child through the same transport ladder). The marker file the fixture's
+// hang mode writes on SIGTERM proves the ladder escalated in order: SIGTERM
+// was delivered, ignored, and only then did SIGKILL end the process.
+func TestE2EHungChildEscalation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e: real go build and child processes; skipped with -short")
+	}
+	t.Setenv("GOPROXY", "off")
+
+	watchDir := t.TempDir()
+	manifest := filepath.Join(watchDir, "tools.json")
+	scratch := t.TempDir()
+	pidFile := filepath.Join(scratch, "pids")
+	sigtermMarker := filepath.Join(scratch, "sigterm-received")
+
+	writeManifest(t, manifest, `["alpha"]`)
+
+	// Short enough that both escalation steps fit comfortably inside the
+	// harness's shutdown budget, long enough for the child's SIGTERM handler
+	// to write the marker before SIGKILL lands.
+	const terminate = 300 * time.Millisecond
+
+	h := newE2EHarness(t, config{
+		buildCommand: goTool(t) + " build -o {{artifact}} ./internal/cli/testdata/child",
+		buildDir:     moduleRoot(t),
+		watchDirs:    []string{watchDir},
+		childArgv:    []string{"{{artifact}}", manifest, pidFile, sigtermMarker},
+		debounce:     50 * time.Millisecond,
+		quiesce:      time.Second,
+		terminate:    terminate,
+	})
+
+	h.awaitListChangedWithin(t, e2eBuildTimeout)
+	require.Equal(t, []string{"alpha"}, h.listNames(t),
+		"expected the hang-mode child to serve normally until shutdown")
+	pids := readPids(t, pidFile)
+	require.Len(t, pids, 1, "expected exactly one child after cold start")
+
+	// shutdown asserts the clean nil exit within waitTimeout: the hung child
+	// must cost at most the two escalation waits, never a stall.
+	h.shutdown(t)
+
+	requireProcessGone(t, pids[0])
+	marker, err := os.ReadFile(sigtermMarker)
+	require.NoError(t, err,
+		"expected the child to have recorded the SIGTERM it ignored before SIGKILL ended it")
+	assert.Contains(t, string(marker), "sigterm", "expected the marker to record the ignored SIGTERM")
 }
 
 // newE2EHarness wires the proxy with the production seams — the real fsnotify

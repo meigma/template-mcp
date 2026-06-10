@@ -6,6 +6,11 @@
 // argument, letting the tests prove that swapped-out children die and that
 // shutdown leaves no orphans.
 //
+// An optional third argument switches on hang mode for the shutdown
+// escalation test: the process ignores SIGTERM — recording each receipt in
+// the file the argument names — and refuses to exit when stdin closes, so
+// only the proxy's SIGKILL escalation can end it.
+//
 // It lives under testdata so the module's ./... wildcards (build, lint, test)
 // never touch it; the E2E test builds it by explicit path. It compiles inside
 // this module against the module's own go.mod, which is what keeps the build
@@ -18,6 +23,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -30,8 +37,8 @@ func main() {
 }
 
 func run() error {
-	if len(os.Args) != 3 {
-		return fmt.Errorf("usage: %s <tools-manifest.json> <pid-file>", os.Args[0])
+	if len(os.Args) != 3 && len(os.Args) != 4 {
+		return fmt.Errorf("usage: %s <tools-manifest.json> <pid-file> [<sigterm-marker-file>]", os.Args[0])
 	}
 
 	tools, err := readManifest(os.Args[1])
@@ -40,6 +47,10 @@ func run() error {
 	}
 	if err := appendPid(os.Args[2]); err != nil {
 		return err
+	}
+	hang := len(os.Args) == 4
+	if hang {
+		resistTermination(os.Args[3])
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "e2e-child", Version: "0.0.1"}, nil)
@@ -53,7 +64,27 @@ func run() error {
 			},
 		)
 	}
-	return server.Run(context.Background(), &mcp.StdioTransport{})
+	err = server.Run(context.Background(), &mcp.StdioTransport{})
+	if hang {
+		// Stdin closed but the process refuses to die: with SIGTERM ignored
+		// above, only the transport's SIGKILL escalation step can end it.
+		select {}
+	}
+	return err
+}
+
+// resistTermination makes hang mode survive the shutdown ladder's polite
+// steps: SIGTERM no longer terminates the process, and each receipt is
+// recorded in markerFile — the escalation test's proof that SIGTERM was
+// delivered and ignored before SIGKILL ended the process.
+func resistTermination(markerFile string) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM)
+	go func() {
+		for range sigs {
+			_ = os.WriteFile(markerFile, []byte("sigterm\n"), 0o600)
+		}
+	}()
 }
 
 // readManifest parses the JSON array of tool names to serve.

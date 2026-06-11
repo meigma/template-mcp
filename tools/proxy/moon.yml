@@ -1,10 +1,10 @@
 language: 'go'
-layer: 'application'
+layer: 'tool'
 stack: 'backend'
 
 project:
-  title: 'template-mcp'
-  description: 'Meigma Go MCP server template.'
+  title: 'mcp-devproxy'
+  description: 'MCP dev proxy that hot-reloads an in-development server behind a stable client session.'
   owner: 'meigma'
   maintainers:
     - 'meigma'
@@ -19,23 +19,23 @@ fileGroups:
     - 'go.mod'
     - 'go.sum'
   lintConfig:
-    - '.golangci.yml'
-    - '.prototools'
-    - '.moon/proto/golangci-lint.toml'
-  releaseConfig:
-    - '.goreleaser.yaml'
-    - 'ghd.toml'
-    - 'release-please-config.json'
-    - '.release-please-manifest.json'
-    - '.github/workflows.disabled/**/*.yml'
+    - '/.golangci.yml'
+    - '/.prototools'
+    - '/.moon/proto/golangci-lint.toml'
+  mockConfig:
+    - '.mockery.yaml'
 
 workspace:
   inheritedTasks:
     include: []
 
+# format/lint reuse the root .golangci.yml. No local-prefix override is needed:
+# goimports matches local-prefixes by string prefix, so the root's
+# 'github.com/meigma/template-mcp' already covers this nested module's path
+# ('github.com/meigma/template-mcp/tools/proxy').
 tasks:
   format:
-    command: 'proto run golangci-lint -- fmt --config .golangci.yml --diff'
+    command: 'proto run golangci-lint -- fmt --config ../../.golangci.yml --diff'
     toolchains: ['go']
     inputs:
       - '@group(goSources)'
@@ -45,7 +45,7 @@ tasks:
       mutex: 'golangci-lint'
 
   lint:
-    command: 'proto run golangci-lint -- run --config .golangci.yml ./... --show-stats=false'
+    command: 'proto run golangci-lint -- run --config ../../.golangci.yml ./... --show-stats=false'
     toolchains: ['go']
     inputs:
       - '@group(goSources)'
@@ -55,33 +55,32 @@ tasks:
       mutex: 'golangci-lint'
 
   build:
-    command: 'go build -o bin/template-mcp ./cmd/template-mcp'
+    command: 'go build -o bin/mcp-devproxy ./cmd/mcp-devproxy'
     toolchains: ['go']
     inputs:
       - '@group(goSources)'
     outputs:
-      - 'bin/template-mcp'
+      - 'bin/mcp-devproxy'
 
   test:
     command: 'go test ./...'
     toolchains: ['go']
     inputs:
       - '@group(goSources)'
+      - '@group(mockConfig)'
     options:
       cache: false
 
   check:
     deps:
-      - 'root:format'
-      - 'root:lint'
-      - 'root:build'
-      - 'root:test'
-      - 'docs:build'
-      - 'proxy:check'
+      - 'proxy:format'
+      - 'proxy:lint'
+      - 'proxy:build'
+      - 'proxy:test'
     inputs:
       - '@group(goSources)'
       - '@group(lintConfig)'
-      - '@group(releaseConfig)'
+      - '@group(mockConfig)'
     options:
       cache: false
       runInCI: true

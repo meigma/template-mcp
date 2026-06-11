@@ -15,6 +15,8 @@
 
 # Go
 bin/
+# Stray `go build` output at the proxy module root (canonical output is tools/proxy/bin/).
+/tools/proxy/mcp-devproxy
 cover.out
 coverage.out
 coverage.html
@@ -43,6 +45,8 @@ htmlcov/
 .coverage.*
 dist/
 build/
+# The Python build/ rule above must not swallow Go packages named build.
+!tools/proxy/internal/build/
 site/
 *.egg-info/
 .eggs/

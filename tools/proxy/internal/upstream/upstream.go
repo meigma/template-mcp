@@ -34,9 +34,9 @@ const clientVersion = "dev"
 // loop should be SIGTERMed within a second, not five.
 const defaultTerminateDuration = time.Second
 
-// defaultHealthTimeout bounds the health gate's tool listing (and the
-// re-list after a child tools/list_changed) when Options.HealthTimeout is
-// zero.
+// defaultHealthTimeout bounds each network step of Start (connect, logging
+// replay, tool listing) and the re-list after a child tools/list_changed
+// when Options.HealthTimeout is zero.
 const defaultHealthTimeout = 5 * time.Second
 
 // Method strings for the server-to-client features the v1 proxy does not
@@ -65,8 +65,13 @@ type Options struct {
 	// selects a dev-loop-short 1s; negative is rejected by New.
 	TerminateDuration time.Duration
 
-	// HealthTimeout bounds the health gate's tool listing and the re-list
-	// after a child emits tools/list_changed. Zero selects 5s.
+	// HealthTimeout bounds each network step of Start individually —
+	// connect (which covers the child's initialize), the logging-level
+	// replay, and the health gate's tool listing — and the re-list after a
+	// child emits tools/list_changed. Each step gets its own
+	// HealthTimeout-derived deadline rather than sharing one Start-wide
+	// budget, so a child that hangs at any step cannot stall Start beyond
+	// that step's bound. Zero selects 5s.
 	HealthTimeout time.Duration
 
 	// LogHandler receives the child's notifications/message params for
@@ -152,8 +157,10 @@ func New(options Options) (*Upstream, error) {
 
 // Start launches the artifact's child, connects to it under the proxy's
 // identity, replays the downstream client's last logging level, and
-// health-gates the result: the child's tools are listed under HealthTimeout
-// and every definition validated. Any failure tears down the half-started
+// health-gates the result: the child's tools are listed and every definition
+// validated. Each network step runs under its own HealthTimeout-derived
+// deadline (see Options.HealthTimeout), so a child that hangs during
+// initialize cannot stall Start. Any failure tears down the half-started
 // child and returns an error — the core keeps the old child serving.
 func (u *Upstream) Start(ctx context.Context, artifact string) (reloader.ChildSession, error) {
 	transport, err := u.factory(artifact)
@@ -185,7 +192,14 @@ func (u *Upstream) Start(ctx context.Context, artifact string) (reloader.ChildSe
 	)
 	client.AddReceivingMiddleware(u.fidelityGapMiddleware())
 
-	session, err := client.Connect(ctx, transport, nil)
+	// A deadline-cancelled Connect leaves no orphan: the SDK closes the
+	// session when initialize fails, and CommandTransport's Close runs the
+	// stdin-close → SIGTERM → SIGKILL ladder (go-sdk v1.6.1: client.go
+	// Connect, cmd.go pipeRWC.Close). The cancel right after Connect is
+	// safe too — jsonrpc2 detaches the session's read loop from this ctx.
+	connectCtx, cancelConnect := context.WithTimeout(ctx, u.healthTimeout)
+	session, err := client.Connect(connectCtx, transport, nil)
+	cancelConnect()
 	if err != nil {
 		return nil, fmt.Errorf("connect to child: %w", err)
 	}
@@ -214,8 +228,9 @@ func (u *Upstream) Start(ctx context.Context, artifact string) (reloader.ChildSe
 
 // replayLoggingLevel re-sends the downstream client's last logging/setLevel
 // to the new child so child log messages flow at the level the client
-// already chose. A child without logging support must not fail the gate, so
-// failures are logged and ignored.
+// already chose. The replay is optional and bounded by the health timeout:
+// a child without logging support must not fail the gate, and a child that
+// never answers must not stall Start, so failures are logged and ignored.
 func (u *Upstream) replayLoggingLevel(ctx context.Context, session *mcp.ClientSession) {
 	if u.levelProvider == nil {
 		return
@@ -224,7 +239,9 @@ func (u *Upstream) replayLoggingLevel(ctx context.Context, session *mcp.ClientSe
 	if level == "" {
 		return
 	}
-	if err := session.SetLoggingLevel(ctx, &mcp.SetLoggingLevelParams{Level: level}); err != nil {
+	replayCtx, cancel := context.WithTimeout(ctx, u.healthTimeout)
+	defer cancel()
+	if err := session.SetLoggingLevel(replayCtx, &mcp.SetLoggingLevelParams{Level: level}); err != nil {
 		u.logger.WarnContext(ctx, "replaying the logging level to the new child failed",
 			"level", level, "error", err)
 	}

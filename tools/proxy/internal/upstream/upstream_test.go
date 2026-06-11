@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -344,6 +345,109 @@ func TestUpstreamStartHealthGateTimeout(t *testing.T) {
 	require.ErrorContains(t, err, "health gate", "expected the gate to identify itself")
 	assert.Less(t, elapsed, 3*time.Second,
 		"expected Start to fail within the health timeout, not hang on the child")
+}
+
+// TestUpstreamStartLoggingReplayTimeout proves the logging/setLevel replay
+// is bounded by the health timeout: a child that never answers it must not
+// stall Start, and because the replay is optional the bounded failure is
+// logged and ignored rather than failing the gate.
+func TestUpstreamStartLoggingReplayTimeout(t *testing.T) {
+	t.Parallel()
+
+	child := newFakeChild("alpha")
+	child.server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method == "logging/setLevel" {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return next(ctx, method, req)
+		}
+	})
+	tc := newTestContext(t, child, upstream.Options{
+		HealthTimeout: 100 * time.Millisecond,
+		LevelProvider: func() mcp.LoggingLevel { return "warning" },
+	})
+
+	start := time.Now()
+	session, err := tc.up.Start(t.Context(), "unused-artifact")
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "expected Start to succeed: the level replay is optional")
+	t.Cleanup(func() { _ = session.Close() })
+	assert.Less(t, elapsed, 3*time.Second,
+		"expected the replay to be bounded by the health timeout, not hang Start")
+	assert.True(t, tc.logs.contains("replaying the logging level"),
+		"expected the bounded replay failure to be logged and ignored")
+}
+
+// hangingTransport simulates a child that starts but never completes the MCP
+// handshake: its connection accepts writes and never delivers a response.
+type hangingTransport struct {
+	conn *hangingConnection
+}
+
+func (t *hangingTransport) Connect(context.Context) (mcp.Connection, error) {
+	return t.conn, nil
+}
+
+// hangingConnection blocks every Read until the connection is closed, so the
+// initialize request outlives any patience the caller grants it.
+type hangingConnection struct {
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (c *hangingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.closed:
+		return nil, io.EOF
+	}
+}
+
+func (c *hangingConnection) Write(context.Context, jsonrpc.Message) error { return nil }
+
+func (c *hangingConnection) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *hangingConnection) SessionID() string { return "" }
+
+// TestUpstreamStartConnectTimeout proves the connect+initialize step is
+// bounded by the health timeout: a child that hangs before completing
+// initialize must not stall Start, and the half-started session must be torn
+// down — the SDK closes it when initialize fails, which for the real
+// CommandTransport runs the SIGTERM/SIGKILL ladder, leaving no orphan.
+func TestUpstreamStartConnectTimeout(t *testing.T) {
+	t.Parallel()
+
+	conn := &hangingConnection{closed: make(chan struct{})}
+	up, err := upstream.New(upstream.Options{
+		HealthTimeout: 100 * time.Millisecond,
+		Transport:     func(string) (mcp.Transport, error) { return &hangingTransport{conn: conn}, nil },
+	})
+	require.NoError(t, err, "construct upstream")
+
+	start := time.Now()
+	_, err = up.Start(t.Context(), "unused-artifact")
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "expected Start to fail when the child hangs during initialize")
+	require.ErrorContains(t, err, "connect to child", "expected the connect step to identify itself")
+	assert.Less(t, elapsed, 3*time.Second,
+		"expected Start to fail within the health timeout, not hang on initialize")
+	require.Eventually(t, func() bool {
+		select {
+		case <-conn.closed:
+			return true
+		default:
+			return false
+		}
+	}, waitTimeout, tick,
+		"expected the hung child's connection to be torn down — no live session left behind")
 }
 
 func TestUpstreamChildRuntimeToolChange(t *testing.T) {

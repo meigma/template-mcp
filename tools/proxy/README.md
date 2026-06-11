@@ -18,32 +18,40 @@ The original design document is retained at [DESIGN.md](DESIGN.md).
 
 ## Quick start
 
-Build the proxy:
-
-```sh
-moon run proxy:build        # produces tools/proxy/bin/mcp-devproxy
-```
-
-Point Claude Code at the proxy instead of the server, in `.mcp.json`:
+Inside this template there is nothing to set up. The repository's checked-in
+`.mcp.json` points Claude Code at a wrapper that builds the proxy through
+Moon's cached `proxy:build` task and then execs it:
 
 ```json
 {
   "mcpServers": {
     "dev": {
-      "command": "tools/proxy/bin/mcp-devproxy",
+      "command": "sh",
       "args": [
-        "--build", "go build -o {{artifact}} ./cmd/template-mcp",
-        "--watch", "cmd", "--watch", "internal",
-        "--", "{{artifact}}", "stdio"
+        "-c",
+        "moon run proxy:build >&2 && exec tools/proxy/bin/mcp-devproxy"
       ]
     }
   }
 }
 ```
 
-The child command after `--` is re-run for every reload cycle with
-`{{artifact}}` replaced by that cycle's freshly built binary. The full CLI
-shape:
+Start `claude` in the repository root, approve the project-scoped `dev`
+server on first use, and edit the server source — the proxy rebuilds and
+hot-swaps the server on every save. Two details of the wrapper are
+load-bearing:
+
+- The `>&2` redirect: stdout is the JSON-RPC channel on this hop, so the
+  build step's output must go to stderr.
+- Building through `proxy:build` rather than a one-time manual build: the
+  task declares its inputs and outputs, so Moon skips it when nothing
+  changed (warm starts are near-instant) and the proxy binary can never be
+  missing or stale.
+
+To run the proxy with explicit flags — for another repository layout, or
+after renaming the template's binary — the child command after `--` is
+re-run for every reload cycle with `{{artifact}}` replaced by that cycle's
+freshly built binary. The full CLI shape:
 
 ```sh
 mcp-devproxy \
@@ -171,22 +179,25 @@ major version changes, and record the results in the table below.
 
 ### Setup
 
-1. Build the proxy: `moon run proxy:build`.
-2. Configure `.mcp.json` as in the quick start. To watch the reload cycle,
-   tee the proxy's stderr to a file:
+1. The checked-in `.mcp.json` already builds and launches the proxy. To watch
+   the reload cycle, temporarily append a stderr redirect to its wrapper
+   command:
 
    ```json
    {
      "mcpServers": {
        "dev": {
          "command": "sh",
-         "args": ["-c", "exec tools/proxy/bin/mcp-devproxy 2>>/tmp/mcp-devproxy.log"]
+         "args": [
+           "-c",
+           "moon run proxy:build >&2 && exec tools/proxy/bin/mcp-devproxy 2>>/tmp/mcp-devproxy.log"
+         ]
        }
      }
    }
    ```
 
-3. Start a tmux session with two panes from the repository root: one running
+2. Start a tmux session with two panes from the repository root: one running
    `claude` (the conversation under test), one for editing source and tailing
    `/tmp/mcp-devproxy.log`.
 

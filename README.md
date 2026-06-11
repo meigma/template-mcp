@@ -44,6 +44,12 @@ go run ./cmd/template-mcp http --addr localhost:8080
 
 Both subcommands build the same `internal/mcpserver` server and differ only in how they connect it to a transport.
 
+## Hot Reload During Development
+
+The repository ships a dev proxy (`tools/proxy`) and a checked-in `.mcp.json` that wires it up, so developing the server with Claude Code needs no setup.
+Start `claude` in the repository root, approve the project-scoped `dev` server, and edit the server source: the proxy rebuilds on save and swaps the running server behind the live session — new and changed tools appear on the next conversation turn with no reconnect.
+See [tools/proxy/README.md](tools/proxy/README.md) for how it works and its flags.
+
 ## The Demo Tool
 
 The template registers one tool, `random_int`, in `internal/mcpserver`.

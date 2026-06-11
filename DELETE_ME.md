@@ -12,6 +12,7 @@ It is only here to orient the initial project owner.
 - A transport-agnostic MCP server in `internal/mcpserver` with one demo tool, `random_int`.
 - A Cobra/Viper CLI under `cmd/template-mcp` and `internal/cli`, with two transport subcommands: `stdio` and `http`.
 - Moon tasks for `format`, `lint`, `build`, `test`, and `check`.
+- A hot-reloading dev loop: a checked-in `.mcp.json` wires Claude Code to the dev proxy in `tools/proxy`, which rebuilds the server on save and swaps it behind the live session.
 - `golangci-lint` wired through Proto and Moon.
 - CI that delegates to `moon ci --summary minimal` with pinned actions, dependency caches, and minimal token permissions.
 - A scheduled container vulnerability scan that uploads SARIF results to GitHub code scanning.
@@ -31,6 +32,10 @@ The package layout keeps the server independent of any transport:
 - `internal/templateinfo` — the single source of truth for the application name and title, and the derived `TEMPLATE_MCP_*` environment-variable prefix. Renaming the app to your project starts here. (Build metadata — version, commit, date — is separate: GoReleaser injects it via ldflags into `cmd/template-mcp/main.go`.)
 
 Both subcommands call `mcpserver.New(...)` and differ only in how they connect it to a transport, so swapping or deleting a transport never touches the tool or server code.
+
+Developing the server with Claude Code needs no setup: the checked-in `.mcp.json` builds the dev proxy (`tools/proxy`) through Moon's cached `proxy:build` task and launches it.
+Start `claude` in the repository root, approve the project-scoped `dev` server, and edit the server source — changed tools appear on the next conversation turn with no reconnect.
+See `tools/proxy/README.md` for how the proxy works.
 
 Moon is the main entrypoint for local development and CI:
 
@@ -65,6 +70,8 @@ The nominal generated-project path is a server with both a downloadable binary a
    ```sh
    mv cmd/template-mcp cmd/YOUR_BINARY
    ```
+
+   The dev proxy's zero-config default builds `./cmd/template-mcp`, so update `defaultBuildCommand` in `tools/proxy/internal/cli/defaults.go` to the new path (or pass explicit `--build` and child arguments in `.mcp.json`).
 
 3. Choose one transport.
 

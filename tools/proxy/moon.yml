@@ -42,6 +42,7 @@ tasks:
       - '@group(lintConfig)'
     options:
       cache: false
+      mutex: 'golangci-lint'
 
   lint:
     command: 'proto run golangci-lint -- run --config ../../.golangci.yml ./... --show-stats=false'
@@ -51,6 +52,7 @@ tasks:
       - '@group(lintConfig)'
     options:
       cache: false
+      mutex: 'golangci-lint'
 
   build:
     command: 'go build -o bin/mcp-devproxy ./cmd/mcp-devproxy'

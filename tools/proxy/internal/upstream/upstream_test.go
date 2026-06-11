@@ -350,7 +350,8 @@ func TestUpstreamStartHealthGateTimeout(t *testing.T) {
 // TestUpstreamStartLoggingReplayTimeout proves the logging/setLevel replay
 // is bounded by the health timeout: a child that never answers it must not
 // stall Start, and because the replay is optional the bounded failure is
-// logged and ignored rather than failing the gate.
+// logged and ignored rather than failing the gate — leaving a session that
+// still serves.
 func TestUpstreamStartLoggingReplayTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -369,16 +370,44 @@ func TestUpstreamStartLoggingReplayTimeout(t *testing.T) {
 		LevelProvider: func() mcp.LoggingLevel { return "warning" },
 	})
 
-	start := time.Now()
-	session, err := tc.up.Start(t.Context(), "unused-artifact")
-	elapsed := time.Since(start)
+	// Start runs in a goroutine so a lost replay bound fails this test
+	// crisply at waitTimeout instead of hanging it until the runner's
+	// timeout: the middleware above only unblocks when its ctx is cancelled,
+	// and without the bound that is the test's own context.
+	type startResult struct {
+		session reloader.ChildSession
+		elapsed time.Duration
+		err     error
+	}
+	results := make(chan startResult, 1)
+	go func() {
+		start := time.Now()
+		session, err := tc.up.Start(t.Context(), "unused-artifact")
+		results <- startResult{session: session, elapsed: time.Since(start), err: err}
+	}()
 
-	require.NoError(t, err, "expected Start to succeed: the level replay is optional")
+	var result startResult
+	select {
+	case result = <-results:
+	case <-time.After(waitTimeout):
+		t.Fatal("expected the replay to be bounded by the health timeout — Start is hung on the unanswered setLevel")
+	}
+
+	require.NoError(t, result.err, "expected Start to succeed: the level replay is optional")
+	session := result.session
 	t.Cleanup(func() { _ = session.Close() })
-	assert.Less(t, elapsed, 3*time.Second,
+	assert.Less(t, result.elapsed, 3*time.Second,
 		"expected the replay to be bounded by the health timeout, not hang Start")
 	assert.True(t, tc.logs.contains("replaying the logging level"),
 		"expected the bounded replay failure to be logged and ignored")
+
+	// The ignored failure must leave a functional session behind, not just a
+	// non-error: the health-gate snapshot carries the tools and calls reach
+	// the child.
+	assert.ElementsMatch(t, []string{"alpha"}, toolNames(session.Tools()),
+		"expected the session returned after the ignored replay failure to carry the child's tools")
+	_, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "alpha"})
+	require.NoError(t, err, "expected the child to still serve tool calls after the ignored replay failure")
 }
 
 // hangingTransport simulates a child that starts but never completes the MCP

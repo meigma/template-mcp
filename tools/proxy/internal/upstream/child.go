@@ -120,7 +120,10 @@ func (s *childSession) onToolListChanged(ctx context.Context, _ *mcp.ToolListCha
 // Close waits for in-flight notification handlers to return, and this is
 // called from one. An intentional Close already underway wins — Close is
 // idempotent either way, and watchDone's closing check keeps a concurrent
-// intentional Close from being reported as a crash.
+// intentional Close from being reported as a crash. The unsynchronized
+// closing check cannot double-fire from notification handlers: jsonrpc2
+// serializes them, so two failUnhealthy calls never race each other — only
+// an intentional Close, which the idempotent session Close absorbs.
 func (s *childSession) failUnhealthy() {
 	if s.closing.Load() {
 		return

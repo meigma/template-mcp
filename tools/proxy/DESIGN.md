@@ -367,6 +367,7 @@ Additional supervisor behaviors:
 | Buffer overflow / timeout | Error the excess/expired calls; never block the downstream session |
 | Stale client view post-swap (mid-turn): call names a removed/changed tool | Intercepted by per-session stale-view gating (§3): friendly stale-reload error until the session re-lists |
 | Child crashes while serving | Auto-restart with backoff (skip build); downstream session survives |
+| Runtime re-list after the child's own `tools/list_changed` fails or validates invalid | The child declared its advertised set stale and offered no trusted replacement — routing against the old set would violate §4.6's no-silent-execution guarantee. Treated as child-unhealthy: the upstream adapter closes the child session (not an intentional close), `Done()` fires, and crash supervision restarts it build-free with backoff through the full health gate |
 | Child crashes during an in-flight cycle | Note it; the cycle's swap already replaces the child |
 | Child uses sampling/elicitation/roots | Child gets an error; proxy logs the gap loudly (v1 fidelity gap, §2) |
 | Watcher burst (save storms) | Debounce + cancel-and-supersede |

@@ -24,8 +24,9 @@ type childSession struct {
 	// its own tools/list_changed. Capacity 1, written latest-wins.
 	toolsCh chan []*mcp.Tool
 
-	// done closes when the child dies unexpectedly; an intentional Close
-	// never closes it.
+	// done closes when the child dies unexpectedly — including when the
+	// adapter declares it unhealthy after a failed runtime re-list; an
+	// intentional Close never closes it.
 	done chan struct{}
 
 	// ready closes once session is set: the happens-before barrier letting
@@ -76,8 +77,13 @@ func (s *childSession) watchDone() {
 // snapshot. The synchronous re-list on the notification goroutine is safe:
 // JSON-RPC responses bypass the handler queue, so the list call completes
 // while this handler blocks, and the serialization of subsequent child
-// notifications behind it is desirable ordering. A snapshot that fails
-// validation is dropped loudly and the previously advertised set stays.
+// notifications behind it is desirable ordering. A failed or invalid re-list
+// means the child itself declared the advertised set stale and offered no
+// trusted replacement, so routing against the old set would break the
+// no-silent-execution-on-new-code guarantee: the child is treated as
+// unhealthy — its session is closed without the intentional-Close mark, Done
+// fires, and the core's crash supervision restarts it through the full
+// health gate.
 func (s *childSession) onToolListChanged(ctx context.Context, _ *mcp.ToolListChangedRequest) {
 	select {
 	case <-s.ready:
@@ -93,17 +99,33 @@ func (s *childSession) onToolListChanged(ctx context.Context, _ *mcp.ToolListCha
 	tools, err := listTools(listCtx, s.session)
 	if err != nil {
 		s.logger.ErrorContext(ctx,
-			"re-listing tools after the child's tools/list_changed failed; keeping the advertised set",
+			"re-listing tools after the child's tools/list_changed failed; treating the child as unhealthy",
 			"error", err)
+		s.failUnhealthy()
 		return
 	}
 	if err := reloader.ValidateTools(tools); err != nil {
 		s.logger.ErrorContext(ctx,
-			"child runtime tool change failed validation; keeping the advertised set",
+			"child runtime tool change failed validation; treating the child as unhealthy",
 			"error", err)
+		s.failUnhealthy()
 		return
 	}
 	s.publish(tools)
+}
+
+// failUnhealthy closes the child session without the intentional-Close mark,
+// so watchDone reports the death on Done and the core's crash supervision
+// restarts the child. The close runs on its own goroutine: the connection's
+// Close waits for in-flight notification handlers to return, and this is
+// called from one. An intentional Close already underway wins — Close is
+// idempotent either way, and watchDone's closing check keeps a concurrent
+// intentional Close from being reported as a crash.
+func (s *childSession) failUnhealthy() {
+	if s.closing.Load() {
+		return
+	}
+	go func() { _ = s.session.Close() }()
 }
 
 // onLoggingMessage forwards one child log notification to the configured

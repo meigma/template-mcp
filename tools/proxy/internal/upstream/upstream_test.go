@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -364,6 +365,70 @@ func TestUpstreamChildRuntimeToolChange(t *testing.T) {
 	snapshot = awaitSnapshot(t, session, "epsilon")
 	assert.Contains(t, toolNames(snapshot), "delta",
 		"expected the final snapshot to include every tool from the burst")
+}
+
+// TestUpstreamRuntimeRelistFailureSignalsDone covers the §5 row for a failed
+// runtime re-list: when a serving child emits tools/list_changed but the
+// re-list errors or validates invalid, the child itself declared the
+// advertised set stale with no trusted replacement, so the adapter must
+// treat it as child death — Done fires and the core's crash supervision
+// restarts it — never keep routing against the untrusted old set.
+func TestUpstreamRuntimeRelistFailureSignalsDone(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		respond func() (mcp.Result, error)
+	}{
+		{
+			name: "re-list returns an error",
+			respond: func() (mcp.Result, error) {
+				return nil, errors.New("child re-list failed")
+			},
+		},
+		{
+			name: "re-list serves an invalid definition",
+			respond: func() (mcp.Result, error) {
+				return &mcp.ListToolsResult{Tools: []*mcp.Tool{{Name: "broken"}}}, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var broken atomic.Bool
+			child := newFakeChild("alpha")
+			child.server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+				return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+					if method == "tools/list" && broken.Load() {
+						return tt.respond()
+					}
+					return next(ctx, method, req)
+				}
+			})
+			tc := newTestContext(t, child, upstream.Options{})
+			session := tc.start(t)
+
+			broken.Store(true)
+			child.addTool("gamma")
+
+			require.Eventually(t, func() bool {
+				select {
+				case <-session.Done():
+					return true
+				default:
+					return false
+				}
+			}, waitTimeout, tick,
+				"expected a failed runtime re-list to close the child session and fire Done")
+			assert.True(t, tc.logs.contains("unhealthy"),
+				"expected the unhealthy treatment to be loud in the logs")
+			assert.NoError(t, session.Close(),
+				"expected a Close after the unhealthy close to stay safe")
+		})
+	}
 }
 
 func TestUpstreamChildDeathClosesDone(t *testing.T) {

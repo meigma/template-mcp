@@ -54,7 +54,10 @@ type ChildSession interface {
 	// ToolsChanged delivers a re-listed and validated tool snapshot each
 	// time the child emits its own tools/list_changed.
 	ToolsChanged() <-chan []*mcp.Tool
-	// Done is closed when the child dies unexpectedly.
+	// Done is closed when the child dies unexpectedly — including when the
+	// adapter declares it unhealthy because a runtime re-list after the
+	// child's own tools/list_changed failed or validated invalid. An
+	// intentional Close never closes it.
 	Done() <-chan struct{}
 	// Close terminates the child session and its process.
 	Close() error

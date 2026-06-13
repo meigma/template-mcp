@@ -55,53 +55,18 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GORELEASER_CURRENT_TAG: v0.0.0-dryrun.${{ github.run_id }}.${{ github.run_attempt }}
 
-      - name: Validate ghd-compatible dry-run artifacts
-        run: |
-          set -euo pipefail
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: "0.11.0"
 
-          version="0.0.0-dryrun.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
-          binary_name="template-mcp"
-          asset_prefix="${binary_name}_"
-          expected_signer="${GITHUB_REPOSITORY}/.github/workflows/release.yml"
-          actual_signer="$(awk -F'"' '/signer_workflow/ { print $2; exit }' ghd.toml)"
-
-          if [ "$actual_signer" != "$expected_signer" ]; then
-            echo "ghd.toml signer_workflow must be $expected_signer, got $actual_signer" >&2
-            exit 1
-          fi
-
-          grep -Fq "name = \"$binary_name\"" ghd.toml
-          grep -Fq "tag_pattern = \"v\${version}\"" ghd.toml
-          grep -Fq "path = \"$binary_name\"" ghd.toml
-
-          jq -e --arg asset_prefix "$asset_prefix" '
-            [
-              .[]
-              | select(
-                  (.type == "Binary" and (.name | startswith($asset_prefix))) or
-                  (.type == "SBOM" and (.name | startswith($asset_prefix))) or
-                  (.type == "Checksum" and .name == "checksums.txt")
-                )
-            ] as $artifacts
-            | ($artifacts | map(select(.type == "Binary")) | length) == 4
-            and ($artifacts | map(select(.type == "SBOM")) | length) == 4
-            and ($artifacts | map(select(.type == "Checksum")) | length) == 1
-          ' dist/artifacts.json
-
-          test -f dist/checksums.txt
-
-          for os in darwin linux; do
-            for arch in amd64 arm64; do
-              expected="${binary_name}_${version}_${os}_${arch}"
-              expected_sbom="${expected}.sbom.json"
-              expected_pattern="pattern = \"${binary_name}_\${version}_${os}_${arch}\""
-
-              jq -e --arg name "$expected" '.[] | select(.type == "Binary" and .name == $name)' dist/artifacts.json >/dev/null
-              jq -e --arg name "$expected_sbom" '.[] | select(.type == "SBOM" and .name == $name)' dist/artifacts.json >/dev/null
-              grep -Fq "$expected_pattern" ghd.toml
-              awk -v name="$expected" '$2 == name && length($1) == 64 && $1 ~ /^[[:xdigit:]]+$/ { found = 1 } END { exit(found ? 0 : 1) }' dist/checksums.txt
-            done
-          done
+      # Run the exact same staging/validation the real release runs, so the
+      # rehearsal cannot drift from production. The script stages assets into
+      # dist/release-assets and validates ghd.toml, the asset set, and checksums.
+      - name: Stage and validate ghd release assets
+        env:
+          DRY_RUN_TAG: v0.0.0-dryrun.${{ github.run_id }}.${{ github.run_attempt }}
+        run: uv run .github/scripts/stage_ghd_release_assets.py --tag "$DRY_RUN_TAG"
 
       - name: Smoke test dry-run binary
         run: |
@@ -111,12 +76,11 @@ jobs:
           binary_name="template-mcp"
           host_os="$(go env GOHOSTOS)"
           host_arch="$(go env GOHOSTARCH)"
-          expected="${binary_name}_${version}_${host_os}_${host_arch}"
-          bin="$(jq -r --arg name "$expected" '.[] | select(.type == "Binary" and .name == $name) | .path' dist/artifacts.json)"
+          bin="dist/release-assets/${binary_name}_${version}_${host_os}_${host_arch}"
 
-          if [ -z "$bin" ] || [ "$bin" = "null" ] || [ ! -f "$bin" ]; then
-            echo "failed to locate host binary artifact $expected" >&2
-            jq . dist/artifacts.json >&2
+          if [ ! -x "$bin" ]; then
+            echo "failed to locate executable host binary artifact $bin" >&2
+            find dist/release-assets -maxdepth 1 -type f -print | sort >&2
             exit 1
           fi
 

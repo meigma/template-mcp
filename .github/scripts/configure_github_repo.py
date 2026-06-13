@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# ///
 """Configure GitHub repository settings from a TOML manifest.
 
 Usage:

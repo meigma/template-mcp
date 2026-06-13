@@ -63,7 +63,7 @@ tasks:
       - 'bin/mcp-devproxy'
 
   test:
-    command: 'go test ./...'
+    command: 'go test -race -coverprofile=coverage.out ./...'
     toolchains: ['go']
     inputs:
       - '@group(goSources)'

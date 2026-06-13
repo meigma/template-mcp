@@ -12,7 +12,9 @@ updates:
       - github-actions
 
   - package-ecosystem: gomod
-    directory: /
+    directories:
+      - /
+      - /tools/proxy
     schedule:
       interval: weekly
     commit-message:

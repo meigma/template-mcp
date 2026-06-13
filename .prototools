@@ -1,4 +1,5 @@
 golangci-lint = "=2.12.2"
+moon = "2.1.4"
 
 [plugins.tools]
 golangci-lint = "file://.moon/proto/golangci-lint.toml"

@@ -44,6 +44,17 @@ tasks:
       cache: false
       mutex: 'golangci-lint'
 
+  # format checks (--diff, used by `check`/CI); format-fix applies the changes.
+  format-fix:
+    command: 'proto run golangci-lint -- fmt --config .golangci.yml'
+    toolchains: ['go']
+    inputs:
+      - '@group(goSources)'
+      - '@group(lintConfig)'
+    options:
+      cache: false
+      mutex: 'golangci-lint'
+
   lint:
     command: 'proto run golangci-lint -- run --config .golangci.yml ./... --show-stats=false'
     toolchains: ['go']

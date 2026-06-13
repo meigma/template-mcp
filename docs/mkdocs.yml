@@ -35,6 +35,10 @@ theme:
 
 nav:
   - Home: index.md
+  - Getting started: getting-started.md
+  - Add a tool: add-a-tool.md
+  - Configuration: configuration.md
+  - Security: security.md
 
 plugins:
   - search

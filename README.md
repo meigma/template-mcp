@@ -15,8 +15,24 @@ Generated projects keep the transport they need and delete the other (see [Choos
 Prerequisites:
 
 - Go 1.26.4
-- Moon 2.x
+- Moon 2.1.4
 - Python 3.14.3 and uv 0.11.0 for the MkDocs documentation project
+
+The toolchain is provisioned by [proto](https://moonrepo.dev/proto) (which Moon
+uses to install the pinned Go toolchain) and orchestrated by
+[Moon](https://moonrepo.dev/moon). Install both, then let proto install the
+pinned tools:
+
+```sh
+# Install proto.
+curl -fsSL https://moonrepo.dev/install/proto.sh | bash
+
+# Install moon.
+proto install moon
+
+# From the repository root: provision the pinned Go, golangci-lint, and moon.
+proto install
+```
 
 After creating a new repository from this template, replace the placeholder names before doing feature work:
 
@@ -63,6 +79,8 @@ The tool is deliberately small but exercises the parts of the protocol you are m
 
 Replace `random_int` with your own tool, or add more tools alongside it. The server and transport code do not change when you do.
 
+A tool that needs shared collaborators (a database handle, an HTTP client, a config struct) gets them through the `Dependencies` struct on `mcpserver.Options`: add fields there, and each `registerXxx` function receives them via `Options.Deps`. Because dependencies flow through `Options`, the server stays transport-agnostic. See the [Add a tool](https://meigma.github.io/template-mcp/add-a-tool/) guide for a worked example.
+
 ## Choosing a Transport
 
 The server in `internal/mcpserver` knows nothing about transports. Each transport is a Cobra subcommand in its own file:
@@ -87,17 +105,24 @@ The template bakes in the practices that an MCP server must have. Preserve them 
 Moon is the standard task front door:
 
 ```sh
-moon run root:format
+moon run root:format       # check formatting (golangci-lint fmt --diff)
+moon run root:format-fix   # apply formatting
 moon run root:lint
 moon run root:build
 moon run root:test
-moon run root:check
+moon run root:check        # format, lint, build, test, docs build, and proxy checks
 ```
 
 CI runs the same aggregate check:
 
 ```sh
 moon ci --summary minimal
+```
+
+Preview the documentation site locally with live reload:
+
+```sh
+moon run docs:serve        # serves on http://127.0.0.1:8000
 ```
 
 The CLI entrypoint uses Cobra and Viper in the same shape as other Meigma CLIs: `cmd/template-mcp` stays thin, `internal/cli` owns command construction, and Viper-backed flags such as the HTTP address can also be supplied through `TEMPLATE_MCP_*` environment variables.
@@ -108,6 +133,28 @@ go run ./cmd/template-mcp stdio
 go run ./cmd/template-mcp http --addr localhost:8080
 go test ./...
 ```
+
+A local build reports `template-mcp dev (none) built unknown` — GoReleaser
+injects the real version, commit, and date at release time.
+
+## Logging and Observability
+
+Both transports log to stderr (never stdout, which the stdio transport reserves
+for JSON-RPC). Two persistent flags control logging, and each is also settable
+through an environment variable:
+
+```sh
+go run ./cmd/template-mcp http --log-level debug --log-format json
+TEMPLATE_MCP_LOG_LEVEL=debug go run ./cmd/template-mcp stdio
+```
+
+- `--log-level` (`TEMPLATE_MCP_LOG_LEVEL`): `debug`, `info` (default), `warn`, or `error`.
+- `--log-format` (`TEMPLATE_MCP_LOG_FORMAT`): `text` (default) or `json`.
+
+The http transport logs a `listening` line on startup and a clean-shutdown pair
+on exit. Metrics and tracing are intentionally out of scope for the template;
+the `Options.Logger` seam in `internal/mcpserver` is where richer instrumentation
+would attach.
 
 ## Container Image
 
@@ -162,6 +209,10 @@ The release path is:
 The root `ghd.toml` matches the default GoReleaser output so generated projects can be installed with `ghd` once the release workflow runs.
 After cloning this template, update `provenance.signer_workflow`, package names, asset patterns, binary paths, and image names to match the new repository and binary name.
 
+## Documentation
+
+Full documentation is published at <https://meigma.github.io/template-mcp/>: a getting-started tutorial, an add-a-tool how-to, a configuration reference, and the security model. The Go API reference is on [pkg.go.dev](https://pkg.go.dev/github.com/meigma/template-mcp). Preview the site locally with `moon run docs:serve`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, local setup expectations, and pull request workflow.
@@ -172,4 +223,11 @@ See [SECURITY.md](SECURITY.md) for supported versions and the private vulnerabil
 
 ## License
 
-Add the repository license before publishing a project generated from this template.
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option (`SPDX-License-Identifier: Apache-2.0 OR MIT`).
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

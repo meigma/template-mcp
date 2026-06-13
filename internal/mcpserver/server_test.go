@@ -22,17 +22,21 @@ func TestServerEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	session := newClientSession(t)
 
-	// tools/list: random_int must be present with a non-null input schema.
+	// tools/list: the server must expose exactly its expected tool set, so a
+	// forgotten registration (or an accidental extra tool) fails here.
 	tools, err := session.ListTools(ctx, nil)
 	require.NoError(t, err, "list tools")
 
-	var randomIntTool *mcp.Tool
+	names := make([]string, 0, len(tools.Tools))
+	byName := make(map[string]*mcp.Tool, len(tools.Tools))
 	for _, tool := range tools.Tools {
-		if tool.Name == "random_int" {
-			randomIntTool = tool
-			break
-		}
+		names = append(names, tool.Name)
+		byName[tool.Name] = tool
 	}
+	assert.ElementsMatch(t, []string{"random_int"}, names,
+		"tools/list must expose exactly the expected tool set")
+
+	randomIntTool := byName["random_int"]
 	require.NotNil(t, randomIntTool, "tools/list must include random_int")
 	require.NotNil(t, randomIntTool.InputSchema, "random_int must publish a JSON Schema object")
 

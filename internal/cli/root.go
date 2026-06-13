@@ -93,6 +93,20 @@ func NewRootCommand(options Options) *cobra.Command {
 	root.SetOut(options.Out)
 	root.SetErr(options.Err)
 
+	// Persistent logging flags apply to every subcommand and bind to
+	// TEMPLATE_MCP_LOG_LEVEL / TEMPLATE_MCP_LOG_FORMAT via initializeConfig.
+	// Logs always go to stderr; stdout stays the JSON-RPC channel.
+	root.PersistentFlags().String(
+		logLevelFlag,
+		defaultLogLevel,
+		"log level: debug, info, warn, or error (env TEMPLATE_MCP_LOG_LEVEL)",
+	)
+	root.PersistentFlags().String(
+		logFormatFlag,
+		defaultLogFormat,
+		"log format: text or json (env TEMPLATE_MCP_LOG_FORMAT)",
+	)
+
 	root.AddCommand(newStdioCommand(options))
 	root.AddCommand(newHTTPCommand(options))
 

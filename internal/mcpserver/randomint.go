@@ -28,8 +28,11 @@ type randomIntOutput struct {
 	Value int `json:"value" jsonschema:"the generated random integer"`
 }
 
-// registerRandomInt adds the random_int tool to the server.
-func registerRandomInt(srv *mcp.Server) {
+// registerRandomInt adds the random_int tool to the server. It accepts the
+// server's [Dependencies] to model the wiring real tools use — a handler that
+// needs a database or HTTP client would close over deps here — even though
+// random_int itself needs none.
+func registerRandomInt(srv *mcp.Server, _ Dependencies) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: randomIntToolName,
 		Description: "Return a cryptographically uniform random integer in the " +

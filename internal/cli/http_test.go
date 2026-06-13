@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -148,7 +149,7 @@ func TestServeHTTPShutsDownOnContextCancel(t *testing.T) {
 		serveErr <- serveHTTP(ctx, ln, httpConfig{
 			build:  BuildInfo{Version: "test"},
 			addr:   ln.Addr().String(),
-			logOut: io.Discard,
+			logger: slog.New(slog.DiscardHandler),
 		})
 	}()
 

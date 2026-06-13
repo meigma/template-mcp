@@ -5,7 +5,7 @@ go 1.26.4
 tool github.com/vektra/mockery/v3
 
 require (
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0

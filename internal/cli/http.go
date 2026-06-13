@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -53,8 +52,10 @@ type httpConfig struct {
 	authToken string
 	// insecure permits a non-loopback bind without authentication.
 	insecure bool
-	// logOut receives the MCP server's diagnostics.
-	logOut io.Writer
+	// logger receives the server's diagnostics and lifecycle events. It must
+	// write to stderr; the HTTP transport has no stdout JSON-RPC constraint, but
+	// keeping logs on stderr stays consistent with the stdio transport.
+	logger *slog.Logger
 }
 
 // newHTTPCommand builds the "http" subcommand, which serves the MCP server over
@@ -72,12 +73,16 @@ func newHTTPCommand(options Options) *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			logger, err := resolveLogger(options.Viper, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
 			return runHTTP(cmd.Context(), httpConfig{
 				build:     options.Build,
 				addr:      options.Viper.GetString(addrFlag),
 				authToken: options.Viper.GetString(authTokenFlag),
 				insecure:  options.Viper.GetBool(insecureFlag),
-				logOut:    cmd.ErrOrStderr(),
+				logger:    logger,
 			})
 		},
 	}
@@ -127,7 +132,10 @@ func runHTTP(ctx context.Context, cfg httpConfig) error {
 // cancelled, then shuts down gracefully, draining in-flight requests for up to
 // httpShutdownTimeout. The listener is closed by the time serveHTTP returns.
 func serveHTTP(ctx context.Context, ln net.Listener, cfg httpConfig) error {
-	logger := slog.New(slog.NewTextHandler(cfg.logOut, nil))
+	logger := cfg.logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 
 	// The factory runs once per session, so each client gets a fresh server with
 	// no shared state — the safe default. If your tools need state shared across
@@ -157,6 +165,8 @@ func serveHTTP(ctx context.Context, ln net.Listener, cfg httpConfig) error {
 		ReadHeaderTimeout: httpReadHeaderTimeout,
 	}
 
+	logger.InfoContext(ctx, "listening", "addr", ln.Addr().String())
+
 	// Graceful shutdown: when the context is cancelled (e.g. SIGINT/SIGTERM),
 	// stop accepting connections and let in-flight requests drain. The
 	// goroutine exits either way (ctx cancelled, or serveDone closed when
@@ -172,6 +182,7 @@ func serveHTTP(ctx context.Context, ln net.Listener, cfg httpConfig) error {
 	go func() {
 		select {
 		case <-ctx.Done():
+			logger.InfoContext(ctx, "shutting down", "drain_timeout", httpShutdownTimeout.String())
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 			defer cancel()
 			shutdownErr <- srv.Shutdown(shutdownCtx)
@@ -188,6 +199,8 @@ func serveHTTP(ctx context.Context, ln net.Listener, cfg httpConfig) error {
 	if err := <-shutdownErr; err != nil {
 		return fmt.Errorf("shutdown http server: %w", err)
 	}
+
+	logger.InfoContext(ctx, "shut down cleanly")
 
 	return nil
 }

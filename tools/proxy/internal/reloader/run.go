@@ -154,9 +154,9 @@ func (r *Reloader) closeChild(ctx context.Context, child ChildSession, role stri
 }
 
 // runLoop is the orchestration state, owned exclusively by the single Run
-// goroutine. There is no state-machine enum: the lifecycle states from §4 of
-// the design document (tools/proxy/DESIGN.md) appear only as slog attributes
-// on transition logs, and a nil channel disables its select case
+// goroutine. There is no state-machine enum: the lifecycle states
+// (SERVING -> BUILDING -> STARTING -> SWAPPING -> SERVING) appear only as slog
+// attributes on transition logs, and a nil channel disables its select case
 // (currentDone, currentTools, debounceCh, retryCh).
 type runLoop struct {
 	r      *Reloader

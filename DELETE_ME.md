@@ -59,10 +59,16 @@ The nominal generated-project path is a server with both a downloadable binary a
 
 ## First Setup Checklist
 
-1. Rename the Go module:
+This rename is currently manual. An automated initializer
+(`moon run root:init`) that performs these rewrites for you is planned; until
+then, work through the steps below.
+
+1. Rename the Go modules. There are two: the root module and the nested dev
+   proxy under `tools/proxy`.
 
    ```sh
    go mod edit -module github.com/meigma/YOUR_REPO
+   (cd tools/proxy && go mod edit -module github.com/meigma/YOUR_REPO/tools/proxy)
    ```
 
 2. Rename the binary directory:
@@ -71,7 +77,10 @@ The nominal generated-project path is a server with both a downloadable binary a
    mv cmd/template-mcp cmd/YOUR_BINARY
    ```
 
-   The dev proxy's zero-config default builds `./cmd/template-mcp`, so update `defaultBuildCommand` in `tools/proxy/internal/cli/defaults.go` to the new path (or pass explicit `--build` and child arguments in `.mcp.json`).
+   The build *source* path `./cmd/template-mcp` is hardcoded in two places and is a hard build-break on rename, not cosmetic:
+
+   - the root `moon.yml` `build` task (`go build -o bin/template-mcp ./cmd/template-mcp`), and
+   - `defaultBuildCommand` in `tools/proxy/internal/cli/defaults.go`, which the dev proxy's zero-config default uses (or pass explicit `--build` and child arguments in `.mcp.json`).
 
 3. Choose one transport.
 
@@ -91,19 +100,33 @@ The nominal generated-project path is a server with both a downloadable binary a
 
    `random_int` in `internal/mcpserver` is a placeholder that exists to prove the end-to-end tool path. Replace it with your own tool (typed input/output structs plus a handler registered via the SDK), or add more tools alongside it; each tool lives in its own file (`randomint.go`) with a matching test file (`randomint_test.go`). The transport subcommands stay the same.
 
-5. Replace template placeholders:
+5. Replace template placeholders. Search case-insensitively and include the
+   human brand variants, not just the slug — a slug-only search misses the
+   client-visible title:
 
    ```sh
-   rg "template-mcp|TEMPLATE_MCP|github.com/meigma/template-mcp"
+   rg -i "template-mcp|TEMPLATE_MCP|meigma|MCP server template"
    ```
 
-   Update Go imports, Moon metadata, README text, docs text, the MCP server `Implementation` name/title, and CLI environment variable prefixes. For release-bearing projects, also update `.goreleaser.yaml`, `release-please-config.json`, `ghd.toml`, `Dockerfile`, and `.github/workflows/release*.yml` as applicable.
-   Update `docs/mkdocs.yml` with the generated repository's GitHub Pages URL, usually `https://OWNER.github.io/REPO/`.
+   In particular, update `Name` and `Title` in `internal/templateinfo/info.go`:
+   `Title` ("Meigma MCP server template") is reported to MCP clients as the
+   server implementation title, so a stale value ships your project under the
+   template's brand. `EnvPrefix` (and the `TEMPLATE_MCP_*` variables) derive from
+   `Name`, so renaming `Name` renames them.
 
-6. Refresh module metadata:
+   Also update Go imports, Moon metadata, README and docs text. For
+   release-bearing projects, update `.goreleaser.yaml`,
+   `release-please-config.json`, `ghd.toml`, `Dockerfile`, and
+   `.github/workflows/release*.yml` as applicable.
+   Update `docs/mkdocs.yml` (`site_url`, `repo_name`, `repo_url`, `edit_uri`)
+   with the generated repository's GitHub Pages URL, usually
+   `https://OWNER.github.io/REPO/`.
+
+6. Refresh module metadata for both modules:
 
    ```sh
    go mod tidy
+   (cd tools/proxy && go mod tidy)
    ```
 
 7. Configure releases for the chosen shape.
@@ -143,8 +166,9 @@ The nominal generated-project path is a server with both a downloadable binary a
 9. Update project-facing docs:
 
    - Rewrite `README.md` for the actual server, including its real tools and the transport you kept.
+   - Rewrite the docs site pages under `docs/docs/` (`index.md`, `getting-started.md`, `add-a-tool.md`, `configuration.md`, `security.md`) for the real server.
    - Review `CONTRIBUTING.md` and `SECURITY.md`.
-   - Add a real license before publishing the repository.
+   - The template is dual-licensed (`LICENSE-APACHE` / `LICENSE-MIT`). Keep both or swap to your project's license, and update the copyright holder in `LICENSE-MIT`.
 
 10. Delete this file:
 

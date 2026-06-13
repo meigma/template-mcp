@@ -14,7 +14,6 @@ conversation, rebuilding, and reconnecting.
 The proxy is dev tooling: it lives in a nested Go module
 (`github.com/meigma/template-mcp/tools/proxy`) so its dependencies never leak
 into the template's `go.mod`, and it is deliberately excluded from releases.
-The original design document is retained at [DESIGN.md](DESIGN.md).
 
 ## Quick start
 
@@ -222,9 +221,9 @@ Record which outcome occurs:
   gate answers with the friendly stale-reload error; after it re-lists, the
   child's own validation rejects the stale arguments.
 
-This scenario settles design open question §10.2 (whether Claude Code
-refreshes the cached definition of a same-named tool); until it is settled,
-only the second outcome's behavior is guaranteed.
+This scenario settles the open question of whether Claude Code refreshes the
+cached definition of a same-named tool; until it is settled, only the second
+outcome's behavior is guaranteed.
 
 **(c) Cold start, pre-first-turn `list_changed`.** End the Claude Code
 session and start a fresh one (which spawns the proxy). Begin a conversation
@@ -244,7 +243,7 @@ callable by the first or second turn without a reconnect.
   honors `tools/list_changed` on a live session — it re-fetched the tool list
   and called a newly added tool (returning an unguessable secret) the next
   turn, with no reconnect. This is the design's load-bearing fact.
-- **2026-06-10, integration suite (design §10.4):** each child accepts a
+- **2026-06-10, integration suite:** each child accepts a
   fresh, proxy-identity `initialize` — nothing replays the downstream
   client's init params. The handshake, logging-level replay, and health gate
   all succeed under the proxy's own identity (`TestIntegrationColdStart` in

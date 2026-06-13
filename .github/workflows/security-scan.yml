@@ -57,7 +57,7 @@ jobs:
         with:
           scan-type: image
           image-ref: template-mcp:security-scan
-          scanners: vuln
+          scanners: vuln,secret,config
           vuln-type: os,library
           severity: HIGH,CRITICAL
           ignore-unfixed: true

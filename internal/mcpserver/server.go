@@ -16,10 +16,22 @@ import (
 	"github.com/meigma/template-mcp/internal/templateinfo"
 )
 
+// Dependencies holds the shared collaborators a real server's tools need — for
+// example a database handle, an outbound HTTP client, or a config struct. It is
+// empty in the template because the demo tool needs nothing; add fields here and
+// read them in your tool registrations (see registerRandomInt). Threading
+// dependencies through [Options] keeps the server transport-agnostic: the stdio
+// and http subcommands construct them and pass them in, the same way for both.
+type Dependencies struct{}
+
 // Options configures the template MCP server.
 type Options struct {
 	// Version is the release version reported in the server implementation info.
 	Version string
+
+	// Deps carries the shared dependencies the server's tools need. The zero
+	// value is valid; the template's demo tool uses none.
+	Deps Dependencies
 
 	// Logger receives server diagnostics. Nil selects a text handler writing
 	// to [os.Stderr].
@@ -49,7 +61,7 @@ func New(options Options) *mcp.Server {
 		Logger: logger,
 	})
 
-	registerRandomInt(srv)
+	registerRandomInt(srv, options.Deps)
 
 	return srv
 }

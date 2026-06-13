@@ -48,7 +48,7 @@ type proxy struct {
 	closeBuilder func() error
 }
 
-// newProxy wires the dev proxy in the design's construction order: core
+// newProxy wires the dev proxy in its required construction order: core
 // adapters first, then the reloader core, then SetFrontend before any Run.
 // The logging passthrough is wired adapter-to-adapter on purpose — the
 // downstream frontend's last-known level feeds each new child, and child log

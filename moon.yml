@@ -27,7 +27,7 @@ fileGroups:
     - 'ghd.toml'
     - 'release-please-config.json'
     - '.release-please-manifest.json'
-    - '.github/workflows.disabled/**/*.yml'
+    - '.github/workflows/**/*.yml'
 
 workspace:
   inheritedTasks:
@@ -36,6 +36,17 @@ workspace:
 tasks:
   format:
     command: 'proto run golangci-lint -- fmt --config .golangci.yml --diff'
+    toolchains: ['go']
+    inputs:
+      - '@group(goSources)'
+      - '@group(lintConfig)'
+    options:
+      cache: false
+      mutex: 'golangci-lint'
+
+  # format checks (--diff, used by `check`/CI); format-fix applies the changes.
+  format-fix:
+    command: 'proto run golangci-lint -- fmt --config .golangci.yml'
     toolchains: ['go']
     inputs:
       - '@group(goSources)'
@@ -63,7 +74,7 @@ tasks:
       - 'bin/template-mcp'
 
   test:
-    command: 'go test ./...'
+    command: 'go test -race -coverprofile=coverage.out ./...'
     toolchains: ['go']
     inputs:
       - '@group(goSources)'

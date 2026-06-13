@@ -33,7 +33,11 @@ func newStdioCommand(options Options) *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runStdio(cmd.Context(), options.Build, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+			logger, err := resolveLogger(options.Viper, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			return runStdio(cmd.Context(), logger, options.Build, cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
 }
@@ -52,10 +56,13 @@ func newStdioCommand(options Options) *cobra.Command {
 // real and the stdio path is testable. In production the streams resolve to
 // [os.Stdin]/[os.Stdout] (see main.go); the closers are no-ops because the
 // process, not this transport, owns those file descriptors.
-func runStdio(ctx context.Context, build BuildInfo, in io.Reader, out, errOut io.Writer) error {
+//
+// logger receives diagnostics. It must write to stderr, never out: out is the
+// JSON-RPC channel for this transport.
+func runStdio(ctx context.Context, logger *slog.Logger, build BuildInfo, in io.Reader, out io.Writer) error {
 	srv := mcpserver.New(mcpserver.Options{
 		Version: build.Version,
-		Logger:  slog.New(slog.NewTextHandler(errOut, nil)),
+		Logger:  logger,
 	})
 
 	input := &eofReader{reader: in}
@@ -63,6 +70,8 @@ func runStdio(ctx context.Context, build BuildInfo, in io.Reader, out, errOut io
 		Reader: io.NopCloser(input),
 		Writer: nopWriteCloser{Writer: out},
 	}
+
+	logger.InfoContext(ctx, "serving over stdio")
 
 	err := srv.Run(ctx, transport)
 	// Treat both normal stdio shutdowns as a clean (zero-status) exit;
@@ -79,6 +88,7 @@ func runStdio(ctx context.Context, build BuildInfo, in io.Reader, out, errOut io
 	// Anything else is a real failure.
 	switch {
 	case err == nil, errors.Is(err, context.Canceled), input.sawEOF():
+		logger.InfoContext(ctx, "stdio server stopped")
 		return nil
 	default:
 		return fmt.Errorf("run stdio server: %w", err)

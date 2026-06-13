@@ -29,6 +29,19 @@ Contributors should:
 
 ## Local Setup
 
+Install the toolchain with [proto](https://moonrepo.dev/proto) and
+[Moon](https://moonrepo.dev/moon) (proto is what Moon uses to provision the
+pinned Go toolchain):
+
+```sh
+curl -fsSL https://moonrepo.dev/install/proto.sh | bash   # install proto
+proto install moon                                        # install moon
+proto install                                             # provision Go, golangci-lint, moon
+```
+
+Then run the full check. Note it also builds the docs, so it needs Python and uv
+(provisioned by proto):
+
 ```sh
 moon run root:check
 ```
@@ -36,12 +49,21 @@ moon run root:check
 Useful project commands:
 
 ```sh
-moon run root:format
+moon run root:format       # check formatting
+moon run root:format-fix   # apply formatting
 moon run root:lint
 moon run root:build
 moon run root:test
+moon run docs:serve        # preview the docs at http://127.0.0.1:8000
 go run ./cmd/template-mcp --version
 ```
+
+A few environment notes:
+
+- macOS has no `timeout`/`gtimeout` by default; install coreutils or use a
+  different mechanism when scripting time-bounded runs.
+- The `stdio` subcommand is a server: it blocks until the client closes its
+  input stream or the process is signaled. That is expected, not a hang.
 
 ## Release Changes
 

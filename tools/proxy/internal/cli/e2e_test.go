@@ -2,8 +2,8 @@
 // adapters end to end — a real go build through the build adapter, real child
 // processes via CommandTransport, a real fsnotify watch. They exist to prove
 // those adapters (the reload loop and the shutdown escalation ladder), not
-// the orchestration logic (DESIGN §9); reconciliation, stale gating, and
-// logging passthrough are covered in-process by the integration suite. Only
+// the orchestration logic; reconciliation, stale gating, and logging
+// passthrough are covered in-process by the integration suite. Only
 // the downstream transport is injected: the fake Claude client needs an
 // in-memory pair, exactly as a future HTTP downstream would slot into the
 // same seam.
@@ -47,8 +47,8 @@ func TestE2EReloadLoop(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: real go build and child processes; skipped with -short")
 	}
-	// The fixture must build offline by construction (DESIGN §9: "tests never
-	// hit the network"); GOPROXY=off turns any violation into a build failure.
+	// The fixture must build offline by construction (tests never hit the
+	// network); GOPROXY=off turns any violation into a build failure.
 	// t.Setenv also keeps this test off the parallel schedule, so the env
 	// change cannot leak into a concurrently running test.
 	t.Setenv("GOPROXY", "off")

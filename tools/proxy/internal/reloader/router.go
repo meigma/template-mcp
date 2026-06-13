@@ -292,9 +292,9 @@ func (r *router) claimCancellation(call *bufferedCall) (releaseDecision, bool) {
 // (closing a pending quiesce drain at zero), while any completion from a
 // superseded child — error or late success — is answered with the friendly
 // interrupted result. Calls stranded past the quiesce grace get an error
-// result (tools/proxy/DESIGN.md §4 step 3): the call may have executed on the
-// old code, and the caller is told to verify rather than handed output from a
-// definition the reload has since replaced.
+// result: the call may have executed on the old code, and the caller is told
+// to verify rather than handed output from a definition the reload has since
+// replaced.
 func (r *router) dispatch(
 	ctx context.Context,
 	child ChildSession,

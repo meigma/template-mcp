@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.3](https://github.com/meigma/template-mcp/compare/v0.1.2...v0.1.3) (2026-06-14)
+
+
+### Features
+
+* address developer-experience review findings ([#6](https://github.com/meigma/template-mcp/issues/6)) ([d00966c](https://github.com/meigma/template-mcp/commit/d00966cf00ec8973416ac278b42be7f496a5935f))
+* **proxy:** add MCP dev proxy for hot-reloading servers behind a stable client session ([#3](https://github.com/meigma/template-mcp/issues/3)) ([b4f38ba](https://github.com/meigma/template-mcp/commit/b4f38ba1807506b679d258650c5394b571196cb2))
+* **proxy:** add self-building .mcp.json for a zero-setup dev loop ([#5](https://github.com/meigma/template-mcp/issues/5)) ([0eda985](https://github.com/meigma/template-mcp/commit/0eda985f23358e812a60d7dae17a756c33599f3b))
+
 ## [0.1.2](https://github.com/meigma/template-mcp/compare/v0.1.1...v0.1.2) (2026-06-09)
 
 

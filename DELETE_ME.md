@@ -59,27 +59,61 @@ The nominal generated-project path is a server with both a downloadable binary a
 
 ## First Setup Checklist
 
-This rename is currently manual. An automated initializer
-(`moon run root:init`) that performs these rewrites for you is planned; until
-then, work through the steps below.
+This checklist is the canonical first-setup procedure, written to be followed
+top-to-bottom by a person or an AI agent. Collect the inputs below first, then
+work through the steps. Two self-checks at the end (a search and a build) confirm
+the rename is complete.
+
+### Inputs
+
+Decide these values once; every step below refers to them. Most projects set
+`REPO`, `BINARY`, and `NAME` to the same string, but they are allowed to differ.
+
+| Variable | This template's value | Used for |
+|----------|----------------------|----------|
+| `OWNER` | `meigma` | GitHub org/user: module paths, `ghcr.io/OWNER/...`, ghd `signer_workflow`, docs URLs, `Dockerfile` `SOURCE`, Moon `owner` |
+| `REPO` | `template-mcp` | repository name: the root module's last segment, the GHCR image, docs `repo_name`/`repo_url`/`site_url` |
+| `BINARY` | `template-mcp` | command/binary name: `cmd/<BINARY>`, build outputs, `.goreleaser.yaml`, `ghd.toml` name/assets/path, `Dockerfile` |
+| `NAME` | `template-mcp` | `templateinfo.Name`; **derives** the `TEMPLATE_MCP_*` env prefix |
+| `TITLE` | `Meigma MCP server template` | `templateinfo.Title`, reported to MCP clients; also Dockerfile/docs descriptions |
+
+Derived automatically — do not treat these as separate inputs:
+
+- Root module = `github.com/OWNER/REPO`; nested module = `github.com/OWNER/REPO/tools/proxy`.
+- Env prefix = uppercase, hyphens-to-underscores of `NAME` (`template-mcp` → `TEMPLATE_MCP`); see `EnvPrefix` in `internal/templateinfo/info.go`.
+- GHCR image = `ghcr.io/OWNER/REPO`; ghd `signer_workflow` = `OWNER/REPO/.github/workflows/release.yml`.
+
+### Do not hand-edit (leave alone or regenerate)
+
+The search in step 5 also matches files you must NOT blindly rewrite:
+
+- `CHANGELOG.md` — release history with real commit/PR URLs. Reset it to a single `# Changelog` heading (Release Please regenerates it); do not rewrite the historical links.
+- `docs/uv.lock` — regenerate with `cd docs && uv lock` after editing `docs/pyproject.toml`. Never hand-edit.
+- `go.sum` — fixed by `go mod tidy`. No manual edits.
+- Build/coverage outputs (`bin/`, `coverage.out`, `docs/build/`) — generated; ignore.
+- `DELETE_ME.md` (this file) — removed in the final step, so don't rename text inside it.
+
+### Steps
 
 1. Rename the Go modules. There are two: the root module and the nested dev
    proxy under `tools/proxy`.
 
    ```sh
-   go mod edit -module github.com/meigma/YOUR_REPO
-   (cd tools/proxy && go mod edit -module github.com/meigma/YOUR_REPO/tools/proxy)
+   go mod edit -module github.com/OWNER/REPO
+   (cd tools/proxy && go mod edit -module github.com/OWNER/REPO/tools/proxy)
    ```
 
 2. Rename the binary directory:
 
    ```sh
-   mv cmd/template-mcp cmd/YOUR_BINARY
+   mv cmd/template-mcp cmd/<BINARY>
    ```
 
-   The build *source* path `./cmd/template-mcp` is hardcoded in two places and is a hard build-break on rename, not cosmetic:
+   The build *source* path `./cmd/template-mcp` is hardcoded in several places and is a hard build-break on rename, not cosmetic. Update every one:
 
-   - the root `moon.yml` `build` task (`go build -o bin/template-mcp ./cmd/template-mcp`), and
+   - the root `moon.yml` `build` task (`go build -o bin/template-mcp ./cmd/template-mcp`),
+   - `.goreleaser.yaml` `main` (`./cmd/template-mcp`),
+   - the `Dockerfile` build stage (`go build ... ./cmd/template-mcp`), and
    - `defaultBuildCommand` in `tools/proxy/internal/cli/defaults.go`, which the dev proxy's zero-config default uses (or pass explicit `--build` and child arguments in `.mcp.json`).
 
 3. Choose one transport.
@@ -108,6 +142,10 @@ then, work through the steps below.
    rg -i "template-mcp|TEMPLATE_MCP|meigma|MCP server template"
    ```
 
+   Map each hit to the right input from the table above (`OWNER`, `REPO`,
+   `BINARY`, `NAME`, `TITLE`) instead of doing one global replace — these axes can
+   differ. Skip the files listed under "Do not hand-edit" above.
+
    In particular, update `Name` and `Title` in `internal/templateinfo/info.go`:
    `Title` ("Meigma MCP server template") is reported to MCP clients as the
    server implementation title, so a stale value ships your project under the
@@ -122,11 +160,12 @@ then, work through the steps below.
    with the generated repository's GitHub Pages URL, usually
    `https://OWNER.github.io/REPO/`.
 
-6. Refresh module metadata for both modules:
+6. Refresh generated metadata:
 
    ```sh
    go mod tidy
    (cd tools/proxy && go mod tidy)
+   (cd docs && uv lock)        # regenerate the docs lockfile after the pyproject rename
    ```
 
 7. Configure releases for the chosen shape.
@@ -157,10 +196,18 @@ then, work through the steps below.
 
    In every release-bearing project, configure the release app credentials, protected-tag bypass, and repository package permissions before the first release. Run the release dry-run workflow after these edits and before merging the first release PR.
 
-8. Run the full local check:
+8. Verify the rename. First make sure the toolchain is installed (see the
+   "Install prerequisites" section of the README: proto → moon → `proto install`),
+   then run both gates:
 
    ```sh
+   # Build/lint/test/docs gate — fails on broken module paths, build-source
+   # paths, or an out-of-date docs lockfile.
    moon run root:check
+
+   # Completeness gate — should print NOTHING. Any remaining hit is a missed
+   # rename (or CHANGELOG history you deliberately reset).
+   rg -i "template-mcp|TEMPLATE_MCP|meigma|MCP server template"
    ```
 
 9. Update project-facing docs:

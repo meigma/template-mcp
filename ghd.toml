@@ -1,7 +1,7 @@
 version = 1
 
 [provenance]
-signer_workflow = "meigma/template-mcp/.github/workflows/release.yml"
+signer_workflow = "meigma/template-mcp/.github/workflows/attest.yml"
 
 [[packages]]
 name = "template-mcp"

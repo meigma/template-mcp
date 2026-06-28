@@ -135,7 +135,7 @@ def validate_ghd_config(config: dict[str, Any], *, binary_name: str, repository:
     if not isinstance(provenance, dict):
         raise StageError("ghd.toml must define a [provenance] table")
 
-    expected_signer = f"{repository}/.github/workflows/release.yml"
+    expected_signer = f"{repository}/.github/workflows/attest.yml"
     actual_signer = provenance.get("signer_workflow")
     if actual_signer != expected_signer:
         raise StageError(

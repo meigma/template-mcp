@@ -247,3 +247,26 @@ to exercise the tag-only publish→cosign→L3-attest path (release.yml requires
 release-please draft, so the rehearsal must go through release-please and burns a
 real version). Pausing to confirm the rehearsal trigger (outward-facing: publishes
 to GHCR + writes to the public Rekor log) before pulling it.
+
+## 2026-06-28 10:20 — Rehearsal blocked: pre-existing v0.1.3 collision
+Forced release 0.1.3 (PR #17 empty commit + Release-As: 0.1.3 → release-please PR
+#18 → merged). PR #18 correctly bumped CHANGELOG + melange.yaml + apko.yaml +
+manifest to 0.1.3 (extra-files config PROVEN working; full melange/apko dry-run
+green on the release-please-- branch). BUT release.yml never fired.
+
+ROOT CAUSE: **v0.1.3 already existed** — `6237639 chore(master): release 0.1.3
+(#4)`, a legit prior release published 2026-06-14 by meigma-release-please[bot]
+(9 binary assets), in master's history. The manifest had been rolled back to
+0.1.2 afterward (why session-start showed 0.1.2 as current; the 5-commit startup
+log didn't reach #4). release-please saw v0.1.3 tag/release already exist and did
+NOT cut a new tag for my commit `fcf58f1`, so the tag-only release.yml path never
+triggered.
+
+STATE (clean, nothing published): no new release.yml run; no GHCR image; no
+cosign/Rekor entry. master is now bumped to 0.1.3 (manifest/CHANGELOG/melange/apko
+via #17+#18) — harmless but cosmetic re-assertion of an already-used version. Old
+v0.1.3 tag → 6237639 (unchanged); my work is on master at fcf58f1.
+
+DID NOT touch the pre-existing v0.1.3 tag/releases (not mine to delete). v0.1.4 is
+FREE. To actually rehearse, force-release 0.1.4. Surfacing to the user + confirming
+before burning another version (outward-facing: GHCR + immutable Rekor).

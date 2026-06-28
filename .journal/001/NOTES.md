@@ -200,3 +200,10 @@ causing spurious lint failures across the sibling worktree. Fixed by
 Next: dispatch release-dry-run + security-scan on the branch to exercise the
 melange/apko CI path (dry-run skips on normal branches). Then PR3 (reusable attest.yml,
 SLSA L3) off master after #12 merges.
+
+## 2026-06-28 09:35 — PR2 CI green (dispatched dry-run + scan); merging
+PR #12 standard checks: CI + GitHub Pages pass. Dispatched on the branch (melange/
+apko jobs skip on normal branches): release-dry-run → SUCCESS (Melange Build Dry Run
+amd64 + arm64, Binary Release Dry Run, Container Image Dry Run all green) and
+security-scan → SUCCESS (Trivy clean on the apko image). Tag-only publish/cosign/
+attest path still unexercised (rehearsal after PR3). Merging PR #12, then PR3.

@@ -207,3 +207,30 @@ apko jobs skip on normal branches): release-dry-run → SUCCESS (Melange Build D
 amd64 + arm64, Binary Release Dry Run, Container Image Dry Run all green) and
 security-scan → SUCCESS (Trivy clean on the apko image). Tag-only publish/cosign/
 attest path still unexercised (rehearsal after PR3). Merging PR #12, then PR3.
+
+## 2026-06-28 09:50 — PR3 shipped (PR #16, open) — SLSA L3
+**PR #16** `ci(release): generate provenance in an isolated reusable workflow (SLSA L3)`
+— branch `ci/slsa-l3-provenance` (commit `b6e00ea`) off master (post-#12).
+https://github.com/meigma/template-mcp/pull/16
+
+New `.github/workflows/attest.yml` (reusable, workflow_call): actions/attest (binary
+checksums) + attest-build-provenance (image). release.yml: binary-release-assets
+uploads checksums artifact (drops in-job attest + id-token/attestations perms); new
+attest-binaries + attest-image caller jobs; container-image-release keeps cosign +
+syft SBOM attest in-job, drops in-job provenance. Signer ripple → attest.yml:
+ghd.toml, stage_ghd_release_assets.py expected_signer (+ test), inspection-summary
+gh-attestation-verify signer-workflow (cosign cert-identity stays release.yml).
+
+The 3 tag-only-path fixes baked in from the start: shared attest job declares
+packages:write so attest-binaries caller grants it too; mkdir -p sbom (PR2);
+attest.yml has its own docker/login-action.
+
+Verified: actionlint clean (release.yml + attest.yml); stage_ghd test 6/6 green
+(now asserts attest.yml signer); root:check green (12 tasks). attest.yml only fires
+on a real tag → exercised by the rehearsal next.
+
+GOTCHA repeat: golangci-lint cache pollution from the removed PR2 worktree again;
+`golangci-lint cache clean` before root:check. (Local-only; CI fresh.)
+
+Next: PR #16 CI + dispatched release-dry-run, then merge. Then the throwaway-tag
+rehearsal (the user-approved fork) to exercise publish→cosign→L3-attest end-to-end.

@@ -13,8 +13,10 @@ project:
   maintainers:
     - 'meigma'
 
+# uv + Python come from mise (system binaries on PATH); uv creates/activates the
+# project .venv itself, so moon manages no toolchain here.
 toolchains:
-  default: 'unstable_python'
+  default: 'system'
 
 fileGroups:
   configs:
@@ -28,7 +30,6 @@ fileGroups:
 tasks:
   install:
     command: 'uv sync --locked'
-    toolchains: ['unstable_python', 'unstable_uv']
     inputs:
       - 'pyproject.toml'
       - 'uv.lock'
@@ -40,7 +41,6 @@ tasks:
 
   build:
     command: 'uv run --locked mkdocs build --strict'
-    toolchains: ['unstable_python', 'unstable_uv']
     deps:
       - 'docs:install'
     inputs:
@@ -51,7 +51,6 @@ tasks:
 
   serve:
     command: 'uv run --locked mkdocs serve --dev-addr 127.0.0.1:8000'
-    toolchains: ['unstable_python', 'unstable_uv']
     deps:
       - 'docs:install'
     inputs:

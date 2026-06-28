@@ -13,7 +13,7 @@ It is only here to orient the initial project owner.
 - A Cobra/Viper CLI under `cmd/template-mcp` and `internal/cli`, with two transport subcommands: `stdio` and `http`.
 - Moon tasks for `format`, `lint`, `build`, `test`, and `check`.
 - A hot-reloading dev loop: a checked-in `.mcp.json` wires Claude Code to the dev proxy in `tools/proxy`, which rebuilds the server on save and swaps it behind the live session.
-- `golangci-lint` wired through Proto and Moon.
+- `golangci-lint` provisioned by mise and wired through Moon.
 - CI that delegates to `moon ci --summary minimal` with pinned actions, dependency caches, and minimal token permissions.
 - A scheduled container vulnerability scan that uploads SARIF results to GitHub code scanning.
 - Dependabot coverage for GitHub Actions, Docker base images, Go modules, and the docs uv project.
@@ -197,7 +197,7 @@ The search in step 5 also matches files you must NOT blindly rewrite:
    In every release-bearing project, configure the release app credentials, protected-tag bypass, and repository package permissions before the first release. Run the release dry-run workflow after these edits and before merging the first release PR.
 
 8. Verify the rename. First make sure the toolchain is installed (see the
-   "Install prerequisites" section of the README: proto → moon → `proto install`),
+   "Install prerequisites" section of the README: install mise, then `mise install`),
    then run both gates:
 
    ```sh

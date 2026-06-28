@@ -9,8 +9,10 @@ project:
   maintainers:
     - 'meigma'
 
+# Every task runs against `system` binaries that mise (mise.toml + mise.lock) puts
+# on PATH; moon manages no language toolchain itself.
 toolchains:
-  default: 'go'
+  default: 'system'
 
 fileGroups:
   goSources:
@@ -20,10 +22,12 @@ fileGroups:
     - 'go.sum'
   lintConfig:
     - '/.golangci.yml'
-    - '/.prototools'
-    - '/.moon/proto/golangci-lint.toml'
+    - '/mise.toml'
+    - '/mise.lock'
   mockConfig:
     - '.mockery.yaml'
+    - '/mise.toml'
+    - '/mise.lock'
 
 workspace:
   inheritedTasks:
@@ -35,8 +39,7 @@ workspace:
 # ('github.com/meigma/template-mcp/tools/proxy').
 tasks:
   format:
-    command: 'proto run golangci-lint -- fmt --config ../../.golangci.yml --diff'
-    toolchains: ['go']
+    command: 'golangci-lint fmt --config ../../.golangci.yml --diff'
     inputs:
       - '@group(goSources)'
       - '@group(lintConfig)'
@@ -46,8 +49,7 @@ tasks:
 
   # format checks (--diff, used by `check`/CI); format-fix applies the changes.
   format-fix:
-    command: 'proto run golangci-lint -- fmt --config ../../.golangci.yml'
-    toolchains: ['go']
+    command: 'golangci-lint fmt --config ../../.golangci.yml'
     inputs:
       - '@group(goSources)'
       - '@group(lintConfig)'
@@ -56,8 +58,7 @@ tasks:
       mutex: 'golangci-lint'
 
   lint:
-    command: 'proto run golangci-lint -- run --config ../../.golangci.yml ./... --show-stats=false'
-    toolchains: ['go']
+    command: 'golangci-lint run --config ../../.golangci.yml ./... --show-stats=false'
     inputs:
       - '@group(goSources)'
       - '@group(lintConfig)'
@@ -67,18 +68,37 @@ tasks:
 
   build:
     command: 'go build -o bin/mcp-devproxy ./cmd/mcp-devproxy'
-    toolchains: ['go']
     inputs:
       - '@group(goSources)'
     outputs:
       - 'bin/mcp-devproxy'
 
   test:
-    command: 'go test -race -coverprofile=coverage.out ./...'
-    toolchains: ['go']
+    # Space-separated -coverprofile (not `=coverage.out`): under the `system`
+    # toolchain moon mangles the `=` form into a file literally named
+    # `=coverage.out`.
+    command: 'go test -race -coverprofile coverage.out ./...'
     inputs:
       - '@group(goSources)'
       - '@group(mockConfig)'
+    options:
+      cache: false
+
+  # Regenerate the committed in-package testify mocks (mocks_test.go) from the
+  # reloader hexagon's ports. Run after changing a mocked interface, then commit
+  # the result. mockery is the mise-managed binary on PATH (formerly the
+  # tools/proxy go.mod `tool` directive); integrity is enforced by mise.lock
+  # (`settings.locked`). The mocks are generated in-package (filename
+  # mocks_test.go, pkgname = source package), so there is no separate-package
+  # drift-check task — a stale or broken mock surfaces as a compile/test failure
+  # in `proxy:test`, matching this template's whitebox-test design.
+  mockery:
+    command: 'mockery'
+    inputs:
+      - '@group(mockConfig)'
+      - 'internal/reloader/*.go'
+    outputs:
+      - 'internal/reloader/mocks_test.go'
     options:
       cache: false
 

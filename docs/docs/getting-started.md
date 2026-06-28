@@ -10,23 +10,19 @@ transports. It assumes nothing beyond a terminal.
 
 ## Install prerequisites
 
-The toolchain is provisioned by [proto](https://moonrepo.dev/proto) and
-orchestrated by [Moon](https://moonrepo.dev/moon). Install both, then let proto
-install the pinned Go and lint toolchains:
+The toolchain is provisioned by [mise](https://mise.jdx.dev) from `mise.toml` +
+`mise.lock` and orchestrated by [Moon](https://moonrepo.dev/moon), which runs
+every task against the mise-provided tools as `system` binaries on PATH. Install
+mise, then provision the pinned tools from the repository root:
 
 ```sh
-# Install proto (which can also manage moon and the Go toolchain).
-curl -fsSL https://moonrepo.dev/install/proto.sh | bash
-
-# Install moon.
-proto install moon
-
-# From the repository root: provision the pinned tools (Go, golangci-lint, moon).
-proto install
+# Install mise: https://mise.jdx.dev/installing-mise.html
+# Then, from the repository root, provision Go, Moon, golangci-lint, and more:
+mise install
 ```
 
-Building the documentation also needs Python and uv; proto installs both from
-the pinned versions when you run the docs tasks.
+Building the documentation also needs Python and uv; mise provisions both from
+the pinned versions, so no extra setup is required.
 
 ## Run over STDIO
 

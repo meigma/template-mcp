@@ -21,6 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # Never auto-download a Go toolchain other than the mise-pinned one
+      # (mise [env] is not carried by the action's shims, so set it on the job).
+      GOTOOLCHAIN: local
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -28,16 +32,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Moon Toolchain
-        uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+      - name: Setup mise
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
-          auto-install: true
-          auto-setup: true
-          cache-base: ${{ github.event.repository.default_branch }}
+          version: 2026.6.14
+          cache: true
+          # Installs every tool from mise.toml honoring mise.lock (locked → fail
+          # closed), including moon, and prepends the shim dir to PATH.
 
       - name: Resolve uv cache directory
         id: uv-cache
-        run: echo "dir=$(proto run uv 0.11.0 -- cache dir)" >> "$GITHUB_OUTPUT"
+        run: echo "dir=$(uv cache dir)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Go modules
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -51,18 +56,18 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/go-build
-          key: ${{ runner.os }}-go-build-${{ hashFiles('.go-version', 'go.sum') }}-${{ github.run_id }}
+          key: ${{ runner.os }}-go-build-${{ hashFiles('mise.lock', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-go-build-${{ hashFiles('.go-version', 'go.sum') }}-
+            ${{ runner.os }}-go-build-${{ hashFiles('mise.lock', 'go.sum') }}-
             ${{ runner.os }}-go-build-
 
       - name: Cache golangci-lint
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/golangci-lint
-          key: ${{ runner.os }}-golangci-lint-${{ hashFiles('.go-version', '.golangci.yml', '.prototools', '.moon/proto/golangci-lint.toml', 'go.sum') }}-${{ github.run_id }}
+          key: ${{ runner.os }}-golangci-lint-${{ hashFiles('mise.lock', '.golangci.yml', 'go.sum') }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-golangci-lint-${{ hashFiles('.go-version', '.golangci.yml', '.prototools', '.moon/proto/golangci-lint.toml', 'go.sum') }}-
+            ${{ runner.os }}-golangci-lint-${{ hashFiles('mise.lock', '.golangci.yml', 'go.sum') }}-
             ${{ runner.os }}-golangci-lint-
 
       - name: Cache uv downloads

@@ -303,3 +303,18 @@ RESIDUE the maintainer may want to tidy (none harmful):
 
 MIGRATION COMPLETE + PROVEN. All 3 PRs (#11 mise, #12 melange/apko, #16 SLSA L3)
 merged; release pipeline rehearsed and cryptographically verified at v0.1.4.
+
+## 2026-06-28 11:00 — Close
+Session 001 closed. All work landed DURING the session (no PRs open at close):
+- #11 `51625ca` Proto→mise + moon system tooling.
+- #12 `d0f4f5c` Dockerfile→melange/apko (+ keyless cosign, syft SBOM, provenance).
+- #16 `dc616c9` provenance in a reusable workflow (SLSA L3).
+- Rehearsal: forced v0.1.4 (#20/#19); release.yml run 28329365824 fully green;
+  image + binaries cosign-verified + L3-attested (signer attest.yml @ v0.1.4).
+All implementation/rehearsal worktrees removed; master == origin (5ec84e3,
+manifest 0.1.4); `git ls-files .journal` on master is empty.
+Hand-off: **v0.1.4 GitHub release is a DRAFT awaiting a human publish** (image live
+on GHCR). Residue (none harmful): cosmetic 0.1.3 CHANGELOG/force-release entry,
+pre-existing v0.1.3 (#4) left untouched, unrelated dependabot PRs #10/#13/#14/#15.
+SUMMARY.md written; INDEX row → complete; TECH_NOTES updated (mise/melange/apko/
+attest.yml tooling + gotchas).

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.4](https://github.com/meigma/template-mcp/compare/v0.1.3...v0.1.4) (2026-06-28)
+
+
+### Chores
+
+* force release 0.1.3 ([#17](https://github.com/meigma/template-mcp/issues/17)) ([ad18779](https://github.com/meigma/template-mcp/commit/ad18779a2afe610417be5481b9e0d89034e95b2f))
+* force release 0.1.4 ([#20](https://github.com/meigma/template-mcp/issues/20)) ([9d1af0c](https://github.com/meigma/template-mcp/commit/9d1af0c758a222b77533924c3f03a25941e6bbe8))
+
 ## [0.1.3](https://github.com/meigma/template-mcp/compare/v0.1.3...v0.1.3) (2026-06-28)
 
 

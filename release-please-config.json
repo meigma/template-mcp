@@ -10,7 +10,8 @@
   "packages": {
     ".": {
       "package-name": "template-mcp",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": ["melange.yaml", "apko.yaml"]
     }
   },
   "changelog-sections": [

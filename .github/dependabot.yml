@@ -23,16 +23,6 @@ updates:
       - dependencies
       - go
 
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: "chore(deps)"
-    labels:
-      - dependencies
-      - docker
-
   - package-ecosystem: uv
     directory: /docs
     schedule:

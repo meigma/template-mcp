@@ -123,3 +123,42 @@ mise.lock; add proxy mockery tasks. `.moon/toolchains.yml`→empty;
 `.prototools`, `.moon/proto/*`. KEEP `.go-version` + Dockerfile (PR2 removes; release.yml:98
 + release-dry-run.yml:36 still `go-version-file: .go-version`). Prove via `moon ci` +
 fail-closed lock (checksum tamper). Branch `build/proto-to-mise` off origin/master.
+
+## 2026-06-28 08:00 — PR1 shipped (PR #11, open, awaiting CI)
+**PR #11** `build(tooling): replace proto with mise and run moon on system
+binaries` — branch `build/proto-to-mise` (commit `271bcba`) off origin/master.
+https://github.com/meigma/template-mcp/pull/11
+
+What landed: `mise.toml` (go 1.26.4/python 3.14.3/uv 0.11.0 + aqua golangci-lint
+2.12.2/mockery 3.7.0/moon 2.3.5/melange 0.54.0/apko 1.2.19/cosign 3.1.1; [env]
+GOTOOLCHAIN=local; [settings] lockfile+locked) + committed `mise.lock` (9 tools ×
+4 platforms = 36 entries). `moon.yml` (root + proxy + docs) → bare commands,
+`toolchains.default: system`, fileGroups track mise files; proxy gains a
+`mockery` regen task. `.moon/toolchains.yml` emptied; `docs/moon.yml`→system.
+`ci.yml`/`docs-pages.yml` → `jdx/mise-action@v4.2.0` (mise 2026.6.14), GOTOOLCHAIN
+env, cache keys → mise.lock. Removed proxy go.mod `tool` directive + tidied
+(96 go.sum deletions). Deleted `.prototools` + `.moon/proto/*`. Prose (README/
+CONTRIBUTING/getting-started/DELETE_ME) → mise.
+
+Verified locally: `moon run root:check` green (12 tasks); `proxy:mockery`
+regenerates committed mocks byte-for-byte; fail-closed proven by checksum-tamper
+(`Checksum mismatch`).
+
+GOTCHAs hit + resolved:
+1. **moon macos-x64 lock quirk** (015 lesson confirmed) — `mise lock` resolved
+   moon for only 3 platforms; hand-added macos-x64 from moon's official v2.3.5
+   checksum (matches sibling's mise.lock exactly).
+2. **In-package mockery drift-check is infeasible** — committed mocks are
+   generated in-package (`package reloader`, unqualified `CallToolFunc`); a
+   generate-to-tempdir-and-diff check produces package-qualified
+   `reloader.CallToolFunc` → false drift. The sibling's mockery-check works only
+   because its mocks live in a separate `mocks/` package. Dropped the check
+   (it was pre-existing sibling infra, NOT a 015 change); kept the regen task.
+3. **NEW BUG found + fixed: `=coverage.out`** — under moon's `system` toolchain,
+   `go test -coverprofile=coverage.out` writes a file literally named
+   `=coverage.out` (moon's old `go` toolchain handled the `=` form; system does
+   not). Fixed root + proxy test tasks to space form `-coverprofile coverage.out`.
+   This is a template-mcp-specific find (sibling's test task has no coverprofile).
+
+Next: watch PR #11 CI (ci/docs-pages/CodeQL/Kusari). Then PR2 (melange/apko) off
+master after #11 merges (consumes PR1's mise tools).

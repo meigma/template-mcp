@@ -44,6 +44,28 @@ python = "3.14.3"
 # The version here is authoritative and matches go.mod's `go 1.26.4`.
 GOTOOLCHAIN = "local"
 
+# Local container image. CI builds the release image via the melange/apko jobs in
+# .github/workflows/release.yml; this task is the local equivalent. melange needs
+# Linux, so `--runner docker` makes `image-local` work on macOS too (Docker Desktop
+# runs the Linux build container).
+[tasks.image-local]
+description = "Build the apko image for the host arch and load it into Docker as template-mcp:dev"
+run = '''
+set -euo pipefail
+arch="$(go env GOARCH)"
+rm -rf packages image.tar
+melange keygen melange.rsa
+printf 'version: "dev"\ncommit: "%s"\ndate: "%s"\n' \
+  "$(git rev-parse --short HEAD 2>/dev/null || echo none)" \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .melange-vars.local.yaml
+melange build melange.yaml --arch "$arch" --signing-key melange.rsa --runner docker \
+  --source-dir . --vars-file .melange-vars.local.yaml
+apko build apko.yaml template-mcp:dev image.tar --arch "$arch" --keyring-append ./melange.rsa.pub
+docker load < image.tar
+docker tag "template-mcp:dev-$arch" template-mcp:dev
+echo "loaded template-mcp:dev (host arch $arch)"
+'''
+
 [settings]
 # Read/write mise.lock, and fail closed if a tool lacks a pre-resolved URL for the
 # current platform — replaces Proto's `checksum-url` pins and extends integrity

@@ -61,8 +61,7 @@ environment of the process that launched them.
   both the binary checksums and the container manifest.
 - A weekly scheduled scan checks the image for vulnerabilities, secrets, and
   misconfigurations and uploads results to GitHub code scanning.
-- Dependabot updates GitHub Actions, Docker base images, both Go modules, and the
-  docs project.
+- Dependabot updates GitHub Actions, both Go modules, and the docs project.
 - Repository settings default to signed commits, squash-only merges, protected
   tags, immutable releases, and private vulnerability reporting.
 

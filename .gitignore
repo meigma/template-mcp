@@ -13,6 +13,23 @@
 .env.*
 .envrc
 
+# mise local overrides (per-developer tool/env overrides; never committed).
+# mise.toml and mise.lock ARE committed.
+mise.local.toml
+.mise.local.toml
+
+# Local container build artifacts (melange apks + ephemeral signing keys + apko
+# image tarballs/SBOMs from `mise run image-local`). melange.yaml/apko.yaml ARE committed.
+/packages/
+/sbom/
+melange*.rsa
+melange*.rsa.pub
+melange-vars.yaml
+.melange-vars.local.yaml
+image.tar
+*.oci
+*.spdx.json
+
 # Go
 bin/
 # Stray `go build` output at the proxy module root (canonical output is tools/proxy/bin/).

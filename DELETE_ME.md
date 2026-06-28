@@ -16,7 +16,7 @@ It is only here to orient the initial project owner.
 - `golangci-lint` provisioned by mise and wired through Moon.
 - CI that delegates to `moon ci --summary minimal` with pinned actions, dependency caches, and minimal token permissions.
 - A scheduled container vulnerability scan that uploads SARIF results to GitHub code scanning.
-- Dependabot coverage for GitHub Actions, Docker base images, Go modules, and the docs uv project.
+- Dependabot coverage for GitHub Actions, Go modules, and the docs uv project.
 - MkDocs Material docs scaffolding under `docs/`, with GitHub Pages as the default publishing target.
 - Repository settings for signed commits, squash-only merges, immutable releases, private vulnerability reporting, and protected tags.
 - Release workflows for Release Please, GoReleaser binary assets, GHCR container images, checksums, SBOMs, and GitHub artifact attestations.
@@ -71,11 +71,11 @@ Decide these values once; every step below refers to them. Most projects set
 
 | Variable | This template's value | Used for |
 |----------|----------------------|----------|
-| `OWNER` | `meigma` | GitHub org/user: module paths, `ghcr.io/OWNER/...`, ghd `signer_workflow`, docs URLs, `Dockerfile` `SOURCE`, Moon `owner` |
+| `OWNER` | `meigma` | GitHub org/user: module paths, `ghcr.io/OWNER/...`, ghd `signer_workflow`, docs URLs, `apko.yaml` image source annotation, Moon `owner` |
 | `REPO` | `template-mcp` | repository name: the root module's last segment, the GHCR image, docs `repo_name`/`repo_url`/`site_url` |
-| `BINARY` | `template-mcp` | command/binary name: `cmd/<BINARY>`, build outputs, `.goreleaser.yaml`, `ghd.toml` name/assets/path, `Dockerfile` |
+| `BINARY` | `template-mcp` | command/binary name: `cmd/<BINARY>`, build outputs, `.goreleaser.yaml`, `ghd.toml` name/assets/path, `melange.yaml`/`apko.yaml` |
 | `NAME` | `template-mcp` | `templateinfo.Name`; **derives** the `TEMPLATE_MCP_*` env prefix |
-| `TITLE` | `Meigma MCP server template` | `templateinfo.Title`, reported to MCP clients; also Dockerfile/docs descriptions |
+| `TITLE` | `Meigma MCP server template` | `templateinfo.Title`, reported to MCP clients; also `melange.yaml`/`apko.yaml`/docs descriptions |
 
 Derived automatically — do not treat these as separate inputs:
 
@@ -113,7 +113,7 @@ The search in step 5 also matches files you must NOT blindly rewrite:
 
    - the root `moon.yml` `build` task (`go build -o bin/template-mcp ./cmd/template-mcp`),
    - `.goreleaser.yaml` `main` (`./cmd/template-mcp`),
-   - the `Dockerfile` build stage (`go build ... ./cmd/template-mcp`), and
+   - the `melange.yaml` `go/build` pipeline (`packages: ./cmd/template-mcp`, `output: template-mcp`), and
    - `defaultBuildCommand` in `tools/proxy/internal/cli/defaults.go`, which the dev proxy's zero-config default uses (or pass explicit `--build` and child arguments in `.mcp.json`).
 
 3. Choose one transport.
@@ -154,7 +154,7 @@ The search in step 5 also matches files you must NOT blindly rewrite:
 
    Also update Go imports, Moon metadata, README and docs text. For
    release-bearing projects, update `.goreleaser.yaml`,
-   `release-please-config.json`, `ghd.toml`, `Dockerfile`, and
+   `release-please-config.json`, `ghd.toml`, `melange.yaml`, `apko.yaml`, and
    `.github/workflows/release*.yml` as applicable.
    Update `docs/mkdocs.yml` (`site_url`, `repo_name`, `repo_url`, `edit_uri`)
    with the generated repository's GitHub Pages URL, usually
@@ -174,24 +174,24 @@ The search in step 5 also matches files you must NOT blindly rewrite:
 
    - Update `.goreleaser.yaml`: `project_name`, build `id`, `main`, binary name, archive name template, and any linked package paths.
    - Update `ghd.toml`: `provenance.signer_workflow`, package name, description, asset patterns, and installed binary path.
-   - Update `Dockerfile`: binary path, labels, default `SOURCE`, base-image tags/digests, and the default subcommand to match the transport you kept (containers usually run `http`).
-   - Update `.github/workflows/release.yml`: `IMAGE_NAME`, binary validation names, container labels, summary commands, and verification examples.
-   - Update `.github/workflows/release-dry-run.yml`: binary validation names, local container image name, and smoke-test commands.
+   - Update `melange.yaml`: `package.name`, `description`, and the `go/build` `packages`/`output`. Update `apko.yaml`: the `@local` package name, image annotations (title/description/source), and the default `cmd` to match the transport you kept (containers usually run `http`).
+   - Update `.github/workflows/release.yml`: `IMAGE_NAME`, binary validation names, the published image tag, smoke-test commands, summary commands, and verification examples.
+   - Update `.github/workflows/release-dry-run.yml`: binary validation names, local apko image name, and smoke-test commands.
    - Update `.github/workflows/security-scan.yml`: local container image name and scan category.
    - Update `.github/repository-settings.toml` only if required status-check names change.
 
    For binary-only projects:
 
    - Keep `.goreleaser.yaml`, `ghd.toml`, `Release Please`, `Binary Release Dry Run`, and the binary asset portions of `release.yml`.
-   - Remove the `container-image-release` job, container verification summary text, and `Container Image Dry Run`.
-   - Remove `Dockerfile`, `.dockerignore`, and `.github/workflows/security-scan.yml` if no container build remains.
+   - Remove the `melange-build` and `container-image-release` jobs, container verification summary text, and `Melange Build Dry Run` / `Container Image Dry Run`.
+   - Remove `melange.yaml`, `apko.yaml`, the `image-local` mise task, and `.github/workflows/security-scan.yml` if no container build remains.
    - Remove `Container Image Dry Run` from required branch checks.
 
    For container-only projects:
 
-   - Keep `Release Please`, `Container Image Dry Run`, `container-image-release`, `Dockerfile`, and `.dockerignore`.
+   - Keep `Release Please`, `Melange Build Dry Run`, `Container Image Dry Run`, `melange-build`, `container-image-release`, `melange.yaml`, and `apko.yaml`.
    - Remove `.goreleaser.yaml`, `ghd.toml`, `binary-release-assets`, binary verification summary text, and `Binary Release Dry Run`.
-   - Change `container-image-release` so it depends only on `resolve-release`.
+   - Change `container-image-release` so it depends only on `resolve-release` and `melange-build`.
    - Remove `Binary Release Dry Run` from required branch checks.
 
    In every release-bearing project, configure the release app credentials, protected-tag bypass, and repository package permissions before the first release. Run the release dry-run workflow after these edits and before merging the first release PR.

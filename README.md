@@ -160,35 +160,36 @@ would attach.
 
 ## Container Image
 
-The included Dockerfile builds a static Linux binary and copies it into a non-root distroless runtime image:
+The image is built with [melange](https://github.com/chainguard-dev/melange) — which
+compiles the binary into a signed Wolfi apk — and [apko](https://github.com/chainguard-dev/apko),
+which assembles that apk plus a minimal Wolfi base into a multi-arch, nonroot OCI
+image (uid/gid 65532, ca-certificates, tzdata, no shell). It mirrors the former
+`distroless/static-debian12:nonroot` posture. Build it locally and load it into Docker:
 
 ```sh
-docker build --target test .
-docker build -t template-mcp:dev .
+mise run image-local                       # builds template-mcp:dev for the host arch
 docker run --rm template-mcp:dev --version
 ```
 
-The Dockerfile pins the builder and runtime images by digest and verifies that the selected Go builder image matches `.go-version`. When bumping Go, update `.go-version` and the builder `FROM` tag/digest together.
+The Wolfi base intentionally floats to the latest (fresh CA bundle/timezones, low CVE
+surface); the exact resolved package versions are recorded in the per-build SBOM and
+provenance attestation rather than pinned in a lockfile. version/commit/date are
+stamped into the binary via melange's `--vars-file`, mirroring GoReleaser.
 
-Containers are the networked deployment, so a container most likely runs the `http` subcommand. The image defaults to `http --addr 0.0.0.0:8080 --insecure`, which runs the demo unauthenticated; `--insecure` is required because the server otherwise refuses to bind a non-loopback address without authentication. Before deploying, drop `--insecure` and supply real authorization (see the security expectations above).
-
-Release builds can pass the same binary metadata injected by GoReleaser:
-
-```sh
-docker build \
-  --build-arg VERSION="$(git describe --tags --always --dirty)" \
-  --build-arg COMMIT="$(git rev-parse HEAD)" \
-  --build-arg DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -t template-mcp:dev .
-```
+Containers are the networked deployment, so the image defaults to
+`http --addr 0.0.0.0:8080 --insecure`, which runs the demo unauthenticated;
+`--insecure` is required because the server otherwise refuses to bind a non-loopback
+address without authentication. Before deploying, drop `--insecure` and supply real
+authorization (see the security expectations above). Override the default at runtime,
+for example `docker run --rm template-mcp:dev stdio`.
 
 ## CI and Security
 
 The default CI workflow keeps permissions minimal, pins external actions, disables checkout credential persistence, and delegates checks to Moon.
 It uses GitHub-hosted dependency caches for Go, golangci-lint, and uv download artifacts while leaving Moon remote caching as an optional follow-up for repositories that need a shared task-output cache.
 The docs workflow builds the MkDocs site on pull requests and deploys `docs/build` to GitHub Pages from the default branch.
-The scheduled security scan workflow builds the local container image weekly, scans it for high/critical fixed vulnerabilities, and uploads SARIF results to GitHub code scanning.
-Dependabot covers GitHub Actions, Docker base images, the root Go module, and the docs uv project.
+The scheduled security scan workflow builds the local melange/apko image weekly, scans it for high/critical fixed vulnerabilities, and uploads SARIF results to GitHub code scanning.
+Dependabot covers GitHub Actions, the root and dev-proxy Go modules, and the docs uv project.
 
 Repository settings live in `.github/repository-settings.toml`.
 They default to immutable releases, private vulnerability reporting, signed commits, squash-only merges, GitHub Pages workflow publishing, and protected tags.
@@ -202,10 +203,10 @@ The release path is:
 
 - Release Please opens and maintains the release PR.
 - Release Please creates a draft GitHub release and tag after merge.
-- Release Dry Run rehearses the GoReleaser binary path and native-runner Docker container build path on pull requests.
+- Release Dry Run rehearses the GoReleaser binary path and the native-runner melange/apko container build path on pull requests.
 - GoReleaser builds binaries, checksums, and SBOMs without publishing directly.
 - The release workflow uploads assets to the draft release and creates a GitHub-hosted attestation for `checksums.txt`.
-- The release workflow builds amd64 and arm64 container images on native GitHub-hosted runners, publishes `ghcr.io/meigma/template-mcp:vX.Y.Z` as a multi-platform manifest, attaches BuildKit provenance and SBOM metadata, and creates a GitHub-native attestation for the manifest digest.
+- The release workflow builds per-arch signed apks with melange on native GitHub-hosted runners, assembles and publishes `ghcr.io/meigma/template-mcp:vX.Y.Z` as a multi-platform apko manifest, signs it with keyless cosign, and attaches GitHub-native SBOM and provenance attestations for the manifest digest.
 - A human inspects the draft release before publication.
 
 The root `ghd.toml` matches the default GoReleaser output so generated projects can be installed with `ghd` once the release workflow runs.

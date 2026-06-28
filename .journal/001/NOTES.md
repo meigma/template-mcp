@@ -162,3 +162,41 @@ GOTCHAs hit + resolved:
 
 Next: watch PR #11 CI (ci/docs-pages/CodeQL/Kusari). Then PR2 (melange/apko) off
 master after #11 merges (consumes PR1's mise tools).
+
+## 2026-06-28 09:25 — PR2 shipped (PR #12, open)
+**PR #12** `build(release): build the container image with melange + apko` —
+branch `build/melange-apko` (commit `7533ea3`) off master (post-#11).
+https://github.com/meigma/template-mcp/pull/12
+
+What landed: `melange.yaml` (go/build ./cmd/template-mcp, ldflags) + `apko.yaml`
+(Wolfi base, nonroot 65532, amd64+arm64, entrypoint /usr/bin/template-mcp +
+`cmd: http --addr 0.0.0.0:8080 --insecure`). Rewired `release.yml`
+(melange-build matrix → apko publish + cosign keyless sign + syft SBOM +
+attest-sbom + in-job attest-build-provenance), `release-dry-run.yml`
+(melange/apko dry-run), `security-scan.yml` (melange/apko → Trivy). Kept binary
+attestation IN-JOB (PR3 moves to reusable attest.yml). setup-go .go-version→go.mod.
+`release-please-config.json` extra-files [melange.yaml, apko.yaml]. mise `image-local`
+task. Deleted Dockerfile/.dockerignore/.go-version; gitignored melange/apko artifacts.
+README/DELETE_ME/docs prose → melange/apko.
+
+KEY in-job-vs-reusable decision: sibling's CURRENT release.yml is post-L3 (reusable
+attest.yml). To keep the 3-PR split, PR2 keeps attestation in-job and ADDS explicit
+`actions/attest-build-provenance` (dropping buildx removed `provenance: mode=max`);
+PR3 extracts to the reusable workflow.
+
+Verified locally: `mise run image-local` → 13 MB nonroot image; `--version` stamps
+`dev (51625ca) ...`; image Entrypoint/Cmd/User EXACTLY mirror the old Dockerfile;
+default run logs `listening addr=[::]:8080`; workflows actionlint-clean; root:check
+green (12 tasks).
+
+Deviation from sibling (noted in PR): dropped the dead `docker` dependabot ecosystem
+(no Dockerfile; Wolfi floats) — sibling left it stale.
+
+GOTCHA (local only, not CI): after `wt remove` of the PR1 worktree, golangci-lint's
+shared cache held stale entries pointing at the deleted `.wt/build-proto-to-mise`,
+causing spurious lint failures across the sibling worktree. Fixed by
+`golangci-lint cache clean`; CI uses a fresh runner so unaffected.
+
+Next: dispatch release-dry-run + security-scan on the branch to exercise the
+melange/apko CI path (dry-run skips on normal branches). Then PR3 (reusable attest.yml,
+SLSA L3) off master after #12 merges.

@@ -270,3 +270,36 @@ v0.1.3 tag → 6237639 (unchanged); my work is on master at fcf58f1.
 DID NOT touch the pre-existing v0.1.3 tag/releases (not mine to delete). v0.1.4 is
 FREE. To actually rehearse, force-release 0.1.4. Surfacing to the user + confirming
 before burning another version (outward-facing: GHCR + immutable Rekor).
+
+## 2026-06-28 10:45 — Rehearsal SUCCESS at v0.1.4; migration proven end-to-end
+v0.1.3 collided (pre-existing), so forced v0.1.4 (PR #20 Release-As → release-please
+PR #19 → merged → tag v0.1.4 + draft). release.yml run 28329365824 = FULL SUCCESS,
+all 8 jobs green ON THE FIRST ATTEMPT:
+Resolve Release, Binary Release Assets, Melange Build amd64+arm64, attest-binaries/
+Attest (reusable), Container Image Release, attest-image/Attest (reusable), Release
+Inspection Summary. The 3 pre-applied fixes held (packages:write on attest-binaries;
+mkdir -p sbom; attest.yml's own docker/login-action) — no shakeout needed (sibling
+burned v1.0.1-1.0.4; we passed clean because the fixes were baked in).
+
+CRYPTO VERIFICATION (all ✓):
+- Image ghcr.io/meigma/template-mcp:v0.1.4 = OCI index, linux/amd64+arm64.
+  Manifest digest sha256:99fb728b...
+- cosign verify (keyless, cert-identity release.yml, issuer GH OIDC) → verified
+  (transparency log + CA).
+- gh attestation verify (image + a linux/amd64 binary): EXIT 0; JSON confirms
+  predicate=slsa.dev/provenance/v1, signer=.../attest.yml@refs/tags/v0.1.4,
+  source_ref=refs/tags/v0.1.4 → SLSA L3 isolation CONFIRMED.
+- Draft release v0.1.4, 9 assets (4 bin + 4 SBOM + checksums), draft=true (human
+  publishes after inspection — by design).
+
+RESIDUE the maintainer may want to tidy (none harmful):
+- v0.1.4 GitHub release is a DRAFT awaiting human publish; the image is already
+  live on GHCR (no draft state for registries).
+- Cosmetic: my #17/#18 bumped master 0.1.2→0.1.3 (re-asserting the already-released
+  #4 v0.1.3) before going to 0.1.4; CHANGELOG now carries a "0.1.3 (force release
+  #17)" entry + the 0.1.4 entry. Manifest now 0.1.4.
+- Pre-existing v0.1.3 tag/releases (from #4, 2026-06-14) left untouched (not mine).
+- GHCR may hold the v0.1.4 image (rehearsal artifact; keep or prune).
+
+MIGRATION COMPLETE + PROVEN. All 3 PRs (#11 mise, #12 melange/apko, #16 SLSA L3)
+merged; release pipeline rehearsed and cryptographically verified at v0.1.4.

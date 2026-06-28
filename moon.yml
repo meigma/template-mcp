@@ -9,8 +9,10 @@ project:
   maintainers:
     - 'meigma'
 
+# Every task runs against `system` binaries that mise (mise.toml + mise.lock) puts
+# on PATH; moon manages no language toolchain itself.
 toolchains:
-  default: 'go'
+  default: 'system'
 
 fileGroups:
   goSources:
@@ -18,10 +20,15 @@ fileGroups:
     - 'internal/**/*.go'
     - 'go.mod'
     - 'go.sum'
+    # Tool/version pins. Under the `system` toolchain moon does not hash the Go
+    # binary's version, so the mise pins are inputs here too — bumping Go (or any
+    # tool) in mise must invalidate the cacheable build task.
+    - 'mise.toml'
+    - 'mise.lock'
   lintConfig:
     - '.golangci.yml'
-    - '.prototools'
-    - '.moon/proto/golangci-lint.toml'
+    - 'mise.toml'
+    - 'mise.lock'
   releaseConfig:
     - '.goreleaser.yaml'
     - 'ghd.toml'
@@ -35,8 +42,7 @@ workspace:
 
 tasks:
   format:
-    command: 'proto run golangci-lint -- fmt --config .golangci.yml --diff'
-    toolchains: ['go']
+    command: 'golangci-lint fmt --config .golangci.yml --diff'
     inputs:
       - '@group(goSources)'
       - '@group(lintConfig)'
@@ -46,8 +52,7 @@ tasks:
 
   # format checks (--diff, used by `check`/CI); format-fix applies the changes.
   format-fix:
-    command: 'proto run golangci-lint -- fmt --config .golangci.yml'
-    toolchains: ['go']
+    command: 'golangci-lint fmt --config .golangci.yml'
     inputs:
       - '@group(goSources)'
       - '@group(lintConfig)'
@@ -56,8 +61,7 @@ tasks:
       mutex: 'golangci-lint'
 
   lint:
-    command: 'proto run golangci-lint -- run --config .golangci.yml ./... --show-stats=false'
-    toolchains: ['go']
+    command: 'golangci-lint run --config .golangci.yml ./... --show-stats=false'
     inputs:
       - '@group(goSources)'
       - '@group(lintConfig)'
@@ -67,15 +71,16 @@ tasks:
 
   build:
     command: 'go build -o bin/template-mcp ./cmd/template-mcp'
-    toolchains: ['go']
     inputs:
       - '@group(goSources)'
     outputs:
       - 'bin/template-mcp'
 
   test:
-    command: 'go test -race -coverprofile=coverage.out ./...'
-    toolchains: ['go']
+    # Space-separated -coverprofile (not `=coverage.out`): under the `system`
+    # toolchain moon mangles the `=` form into a file literally named
+    # `=coverage.out`.
+    command: 'go test -race -coverprofile coverage.out ./...'
     inputs:
       - '@group(goSources)'
     options:

@@ -30,16 +30,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Moon Toolchain
-        uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+      - name: Setup mise
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
-          auto-install: true
-          auto-setup: true
-          cache-base: ${{ github.event.repository.default_branch }}
+          version: 2026.6.14
+          cache: true
 
       - name: Resolve uv cache directory
         id: uv-cache
-        run: echo "dir=$(proto run uv 0.11.0 -- cache dir)" >> "$GITHUB_OUTPUT"
+        run: echo "dir=$(uv cache dir)" >> "$GITHUB_OUTPUT"
 
       - name: Cache uv downloads
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5

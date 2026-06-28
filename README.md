@@ -14,24 +14,26 @@ Generated projects keep the transport they need and delete the other (see [Choos
 
 Prerequisites:
 
-- Go 1.26.4
-- Moon 2.1.4
-- Python 3.14.3 and uv 0.11.0 for the MkDocs documentation project
+- [mise](https://mise.jdx.dev) — provisions every pinned tool from `mise.toml` +
+  `mise.lock`: Go, Moon, Python + uv (for the MkDocs docs project), the
+  `golangci-lint` and `mockery` CLIs, and `melange`/`apko`/`cosign` for releases.
+  Run `mise install` once; there is nothing else to install by hand.
+- Docker — only to build and scan the container image locally; not needed to run
+  the server itself.
 
-The toolchain is provisioned by [proto](https://moonrepo.dev/proto) (which Moon
-uses to install the pinned Go toolchain) and orchestrated by
-[Moon](https://moonrepo.dev/moon). Install both, then let proto install the
-pinned tools:
+Tool versions live in `mise.toml`; `mise.lock` records a per-platform download URL
+and checksum for each (and, for the aqua-backed CLIs, cosign/SLSA/GitHub-attestation
+verification). `mise install` runs with `locked = true`, so it **fails closed** if a
+tool lacks a pre-resolved, checksummed entry for the current platform — replacing the
+former Proto `checksum-url` pins. Moon runs every task against these tools as `system`
+binaries on PATH and manages no toolchain itself. To bump a tool, edit its version in
+`mise.toml`, run `mise lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64`,
+and commit `mise.toml` + `mise.lock`.
 
 ```sh
-# Install proto.
-curl -fsSL https://moonrepo.dev/install/proto.sh | bash
-
-# Install moon.
-proto install moon
-
-# From the repository root: provision the pinned Go, golangci-lint, and moon.
-proto install
+# Install mise (https://mise.jdx.dev/installing-mise.html), then from the repo
+# root provision every pinned tool (Go, Moon, the dev CLIs, and the release stack):
+mise install
 ```
 
 After creating a new repository from this template, replace the placeholder names before doing feature work:

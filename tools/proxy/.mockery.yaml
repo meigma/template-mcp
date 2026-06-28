@@ -1,10 +1,14 @@
 # Mockery config for the dev proxy's port mocks (internal/reloader).
 #
-# Mockery is pinned via the `tool` directive in this module's go.mod so mock
-# generation is reproducible and offline-friendly (versioned + checksummed in
-# go.mod/go.sum, served from the Go module cache). Regenerate from tools/proxy:
+# Mockery is provisioned by mise (mise.toml + mise.lock at the repo root), so the
+# version is pinned and integrity-verified fleet-wide. Regenerate the committed
+# mocks from the repo root with:
 #
-#   go tool mockery
+#   moon run proxy:mockery
+#
+# or directly from tools/proxy with the mise-managed binary:
+#
+#   mockery
 #
 # Mocks are generated in-package as mocks_test.go: the repo intentionally uses
 # whitebox tests (testpackage is disabled in the root .golangci.yml), and

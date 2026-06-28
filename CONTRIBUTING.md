@@ -29,21 +29,14 @@ Contributors should:
 
 ## Local Setup
 
-Install the toolchain with [proto](https://moonrepo.dev/proto) and
-[Moon](https://moonrepo.dev/moon) (proto is what Moon uses to provision the
-pinned Go toolchain):
+The pinned toolchain (Go, Moon, the dev CLIs, Python + uv for the docs) is
+provisioned by [mise](https://mise.jdx.dev) from `mise.toml` + `mise.lock`; Moon
+runs every task against those tools as `system` binaries on PATH. Install mise,
+then provision the toolchain and run the full check:
 
 ```sh
-curl -fsSL https://moonrepo.dev/install/proto.sh | bash   # install proto
-proto install moon                                        # install moon
-proto install                                             # provision Go, golangci-lint, moon
-```
-
-Then run the full check. Note it also builds the docs, so it needs Python and uv
-(provisioned by proto):
-
-```sh
-moon run root:check
+mise install          # provision every pinned tool, honoring mise.lock
+moon run root:check    # also builds the docs (needs the mise-provided Python + uv)
 ```
 
 Useful project commands:

@@ -47,4 +47,4 @@ annotations:
   org.opencontainers.image.title: template-mcp
   org.opencontainers.image.description: Meigma Go MCP server template
   org.opencontainers.image.source: https://github.com/meigma/template-mcp
-  org.opencontainers.image.version: "0.1.3" # x-release-please-version
+  org.opencontainers.image.version: "0.1.4" # x-release-please-version

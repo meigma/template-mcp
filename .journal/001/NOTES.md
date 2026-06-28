@@ -234,3 +234,16 @@ GOTCHA repeat: golangci-lint cache pollution from the removed PR2 worktree again
 
 Next: PR #16 CI + dispatched release-dry-run, then merge. Then the throwaway-tag
 rehearsal (the user-approved fork) to exercise publish→cosign→L3-attest end-to-end.
+
+## 2026-06-28 09:58 — All three PRs merged
+PR #16 (SLSA L3) dispatched release-dry-run → SUCCESS (binary dry-run validates
+ghd.toml signer == attest.yml; melange/apko dry-run green). Merged to master.
+All three session-015 PRs now on master:
+- #11 Proto→mise + moon system tooling.
+- #12 Dockerfile→melange/apko (+ keyless cosign, SBOM/provenance).
+- #16 provenance in an isolated reusable workflow (SLSA L3).
+Migration COMPLETE on master. Remaining: the user-approved throwaway-tag rehearsal
+to exercise the tag-only publish→cosign→L3-attest path (release.yml requires a
+release-please draft, so the rehearsal must go through release-please and burns a
+real version). Pausing to confirm the rehearsal trigger (outward-facing: publishes
+to GHCR + writes to the public Rekor log) before pulling it.

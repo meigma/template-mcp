@@ -92,3 +92,34 @@ Verdict: all three PRs apply to template-mcp with the four divergences above; th
 is a faithful, slightly-smaller reproduction. Next: deliver assessment + surface the
 real forks (mockery handling, forced-release rehearsal appetite, PR structure) before
 implementing.
+
+## 2026-06-28 07:55 — Decisions + prerequisites confirmed; starting PR1
+Developer answered the three forks (AskUserQuestion):
+1. **Mockery → move to mise (aqua).** Add `aqua:vektra/mockery` to mise.toml + a
+   `proxy:mockery`/`mockery-check` moon task; drop the `tool github.com/vektra/
+   mockery/v3` directive from `tools/proxy/go.mod` so mise is the single version
+   source (then `go mod tidy` the proxy). So mise tool set = 9: go, python, uv,
+   golangci-lint, mockery, moon, melange, apko, cosign.
+2. **Release rehearsal → YES.** After the 3 PRs land, cut a throwaway/prerelease
+   tag to exercise the tag-only publish→cosign→attest path (how 015 found 3 bugs).
+3. **PR structure → three PRs mirroring 015**, fixes folded in.
+
+Prereqs (this machine): mise 2026.6.14 ✓ (== sibling CI pin), moon 2.3.5 (via
+proto) ✓, proto 0.58.1, docker 29.4.0 ✓ (melange --runner docker), cosign (nix) +
+syft (go bin) present; melange/apko absent → mise provides. NOTE memory: bare `go`
+is broken on this box (goenv shim) — use moon tasks / `mise exec`.
+
+**PR1 plan (mirror #24 — Proto→mise + moon system):** new `mise.toml`
+([tools] go 1.26.4/python 3.14.3/uv 0.11.0 + aqua golangci-lint 2.12.2/mockery/
+moon 2.3.5/melange/apko/cosign; [env] GOTOOLCHAIN=local; [settings] lockfile+locked;
+no [tasks] yet — image-local lands in PR2); committed `mise.lock`
+(`touch mise.lock` + `mise lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64`,
+watch the macos-x64 moon-entry persist quirk). `moon.yml` (root + tools/proxy +
+docs) → bare commands, `toolchains.default: system`, fileGroups track mise.toml/
+mise.lock; add proxy mockery tasks. `.moon/toolchains.yml`→empty;
+`docs/moon.yml`→system. `ci.yml`+`docs-pages.yml`: `moonrepo/setup-toolchain`→
+`jdx/mise-action` (SHA-pinned, mise 2026.6.14), cache keys `.go-version`/`.prototools`/
+`.moon/proto/*`→`mise.lock`. Remove proxy go.mod tool directive + tidy. Delete
+`.prototools`, `.moon/proto/*`. KEEP `.go-version` + Dockerfile (PR2 removes; release.yml:98
++ release-dry-run.yml:36 still `go-version-file: .go-version`). Prove via `moon ci` +
+fail-closed lock (checksum tamper). Branch `build/proto-to-mise` off origin/master.

@@ -93,7 +93,7 @@ class StageGhdReleaseAssetsTest(unittest.TestCase):
             self.assertIn("checksum mismatch for template-mcp_1.2.3_linux_amd64", stderr)
 
     def test_fails_on_wrong_signer_workflow(self) -> None:
-        with fixture(signer="other/repo/.github/workflows/release.yml") as root:
+        with fixture(signer="other/repo/.github/workflows/attest.yml") as root:
             result, _, stderr = run_script(root)
 
             self.assertEqual(result, 1)
@@ -126,7 +126,7 @@ def run_script(root: Path) -> tuple[int, str, str]:
 @contextlib.contextmanager
 def fixture(
     *,
-    signer: str = "meigma/template-mcp/.github/workflows/release.yml",
+    signer: str = "meigma/template-mcp/.github/workflows/attest.yml",
     missing_checksum: str | None = None,
     checksum_override: tuple[str, str] | None = None,
     omit_artifact: tuple[str, str, str] | None = None,

@@ -78,8 +78,6 @@ jobs:
       - resolve-release
     permissions:
       contents: write
-      id-token: write
-      attestations: write
     steps:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -153,10 +151,32 @@ jobs:
           RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
         run: gh release upload "$RELEASE_TAG" dist/release-assets/* --clobber
 
-      - name: Attest release checksums
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+      - name: Upload checksums for isolated attestation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          subject-checksums: dist/release-assets/checksums.txt
+          name: release-checksums
+          path: dist/release-assets/checksums.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  # Generate binary provenance in an ISOLATED reusable workflow (SLSA L3): the
+  # signing OIDC token is minted in attest.yml, unreachable by the build steps.
+  attest-binaries:
+    needs:
+      - binary-release-assets
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+      # attest.yml is shared with attest-image, whose attest job declares
+      # packages: write for the image attestation's push-to-registry. A reusable
+      # workflow cannot request more permissions than its caller grants, so this
+      # caller must also grant packages even though the binary attestation never
+      # pushes to a registry (unused here, but required to satisfy the shared job).
+      packages: write
+    uses: ./.github/workflows/attest.yml
+    with:
+      checksums-artifact: release-checksums
 
   # Build the per-arch signed apk on a native runner (no QEMU). Each runner mints
   # its own ephemeral melange key (distinct filename) and uploads its apk plus its
@@ -368,14 +388,23 @@ jobs:
           sbom-path: image.spdx.json
           push-to-registry: true
 
-      # apko has no BuildKit provenance, so generate it explicitly (replaces the
-      # former Dockerfile/buildx `provenance: mode=max`).
-      - name: Attest container image provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        with:
-          subject-name: ${{ steps.publish.outputs.name }}
-          subject-digest: ${{ steps.publish.outputs.digest }}
-          push-to-registry: true
+  # Generate container provenance in the ISOLATED reusable workflow (SLSA L3).
+  # apko has no BuildKit provenance, so attest.yml generates it explicitly with the
+  # signing key isolated from this build job (replaces the former in-job
+  # attest-build-provenance / Dockerfile-buildx `provenance: mode=max`).
+  attest-image:
+    needs:
+      - container-image-release
+    permissions:
+      id-token: write
+      attestations: write
+      packages: write
+      contents: read
+    uses: ./.github/workflows/attest.yml
+    with:
+      subject-name: ${{ needs.container-image-release.outputs.image-name }}
+      subject-digest: ${{ needs.container-image-release.outputs.image-digest }}
+      push-to-registry: true
 
   release-inspection-summary:
     name: Release Inspection Summary
@@ -384,6 +413,8 @@ jobs:
       - resolve-release
       - binary-release-assets
       - container-image-release
+      - attest-binaries
+      - attest-image
     permissions: {}
     steps:
       - name: Write inspection summary
@@ -403,7 +434,7 @@ jobs:
             echo '```sh'
             echo "gh release view $RELEASE_TAG --repo $GITHUB_REPOSITORY --json isDraft,assets"
             echo "asset=\"template-mcp_${RELEASE_VERSION}_\$(go env GOOS)_\$(go env GOARCH)\""
-            echo "gh attestation verify \"dist/release-assets/\${asset}\" --repo \"$GITHUB_REPOSITORY\" --signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/release.yml\" --source-ref \"refs/tags/$RELEASE_TAG\" --deny-self-hosted-runners"
+            echo "gh attestation verify \"dist/release-assets/\${asset}\" --repo \"$GITHUB_REPOSITORY\" --signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/attest.yml\" --source-ref \"refs/tags/$RELEASE_TAG\" --deny-self-hosted-runners"
             echo "ghd download \"$GITHUB_REPOSITORY/template-mcp@${RELEASE_VERSION}\" --output \"\$(mktemp -d)\""
             echo '```'
             echo
@@ -413,7 +444,7 @@ jobs:
             echo "docker login ghcr.io"
             echo "docker pull \"${IMAGE_NAME}:${RELEASE_TAG}\""
             echo "docker run --rm \"${IMAGE_NAME}:${RELEASE_TAG}\" --version"
-            echo "gh attestation verify \"oci://${IMAGE_NAME}@${IMAGE_DIGEST}\" --repo \"$GITHUB_REPOSITORY\" --signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/release.yml\" --source-ref \"refs/tags/$RELEASE_TAG\" --deny-self-hosted-runners"
+            echo "gh attestation verify \"oci://${IMAGE_NAME}@${IMAGE_DIGEST}\" --repo \"$GITHUB_REPOSITORY\" --signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/attest.yml\" --source-ref \"refs/tags/$RELEASE_TAG\" --deny-self-hosted-runners"
             echo "cosign verify \"${IMAGE_NAME}@${IMAGE_DIGEST}\" --certificate-identity-regexp \"^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@.*\" --certificate-oidc-issuer https://token.actions.githubusercontent.com"
             echo '```'
             echo

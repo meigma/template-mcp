@@ -205,8 +205,9 @@ The release path is:
 - Release Please creates a draft GitHub release and tag after merge.
 - Release Dry Run rehearses the GoReleaser binary path and the native-runner melange/apko container build path on pull requests.
 - GoReleaser builds binaries, checksums, and SBOMs without publishing directly.
-- The release workflow uploads assets to the draft release and creates a GitHub-hosted attestation for `checksums.txt`.
-- The release workflow builds per-arch signed apks with melange on native GitHub-hosted runners, assembles and publishes `ghcr.io/meigma/template-mcp:vX.Y.Z` as a multi-platform apko manifest, signs it with keyless cosign, and attaches GitHub-native SBOM and provenance attestations for the manifest digest.
+- The release workflow uploads assets to the draft release; binary checksum provenance is attested from an isolated reusable workflow (`.github/workflows/attest.yml`).
+- The release workflow builds per-arch signed apks with melange on native GitHub-hosted runners, assembles and publishes `ghcr.io/meigma/template-mcp:vX.Y.Z` as a multi-platform apko manifest, signs it with keyless cosign, attaches a GitHub-native SBOM attestation, and attests image provenance from the same isolated `attest.yml` workflow.
+- Provenance is generated in `attest.yml` so its signing key is unreachable by the build jobs (SLSA Build L3). Verify with `gh attestation verify <artifact-or-oci-ref> --signer-workflow <repo>/.github/workflows/attest.yml`; the keyless cosign image signature is still issued by `release.yml`.
 - A human inspects the draft release before publication.
 
 The root `ghd.toml` matches the default GoReleaser output so generated projects can be installed with `ghd` once the release workflow runs.
